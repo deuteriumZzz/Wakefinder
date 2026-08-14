@@ -1,7 +1,7 @@
 from functools import lru_cache
 
 from eth_account import Account
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Routers this bot is allowed to point at. eth_router_address is still
@@ -31,6 +31,16 @@ class Settings(BaseSettings):
 
     max_gas_gwei: float = 50
     max_capital_per_bundle_eth: float = 0.05
+
+    # Sentinel file: if it exists, the bot stops before its next action. `touch`
+    # it to halt without a redeploy; delete it to resume.
+    kill_switch_file: str = ".kill"
+
+    # Share of net profit bid as extra priority fee, to compete in the block
+    # builder's inclusion auction — builders sort bundles by total value
+    # (priority fees + any explicit transfers), so a bundle that doesn't bid
+    # near its actual edge routinely loses to one that does.
+    profit_share_bps: int = Field(default=9000, ge=0, le=10_000)
 
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":

@@ -37,6 +37,12 @@ cp .env.example .env  # fill in your own RPC/keys — never commit .env
   resolve to the same wallet — the signer key must never hold funds.
 - Default strategy is backrun/arbitrage, not sandwich (sandwich directly harms the
   tracked trader — that's an explicit opt-in, not the default).
-- Known gap (tracked for Phase 2): no builder/coinbase payment in the bundle yet,
-  so it's unlikely to win a block-builder auction against real competing
-  searchers — a "never profitable" gap, not a fund-loss one.
+- **Kill switch**: `touch .kill` (path configurable via `KILL_SWITCH_FILE`) to
+  stop the bot before its next action, no redeploy needed. `rm .kill` to resume.
+- Balance is checked before every bundle — both native ETH (covers gas for both
+  legs at the fee it's about to bid) and `token_in` — the bot skips the
+  opportunity rather than sign a transaction it can't afford.
+- Bundle inclusion tip scales with `PROFIT_SHARE_BPS` (default 90%) of the
+  opportunity's own captured profit, not a flat rate — bids close to what the
+  opportunity is actually worth, which is what it takes to win the block
+  builder's inclusion auction against other searchers.

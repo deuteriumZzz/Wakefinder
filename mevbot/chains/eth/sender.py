@@ -1,7 +1,11 @@
-"""Flashbots bundle sender. Always simulates before sending, and re-checks the
-*simulated* profit against bundle.min_profit_wei — the final safety net against
-on-chain state having moved between simulate() and now (someone else already
-took the opportunity, or the reserves shifted for any other reason).
+"""Flashbots bundle sender. Always simulates before sending — the state-drift
+safety net (on-chain reserves having moved between simulate() and now) is
+already provided by each leg's amountOutMin: if reserves shifted past that
+tolerance, the router itself reverts with INSUFFICIENT_OUTPUT_AMOUNT and this
+simulation catches it as a per-tx error below. (coinbaseDiff was tried here
+first and removed: it's what WE pay the builder in fees, not our profit — our
+profit lands as a token balance change in our own wallet, not in coinbaseDiff —
+so it can't stand in for "is this still worth sending".)
 
 ponytail: the `flashbots` pip package only wraps sync Web3 (no async client), so
 this uses a plain Web3 instance internally via asyncio.to_thread rather than
@@ -17,14 +21,6 @@ from web3 import HTTPProvider, Web3
 from mevbot.common.interfaces import Bundle, BundleSender
 
 
-def _coinbase_diff_wei(simulation: dict) -> int:
-    total = 0
-    for tx_result in simulation.get("results", []):
-        diff = tx_result.get("coinbaseDiff", 0)
-        total += int(diff, 16) if isinstance(diff, str) else int(diff)
-    return total
-
-
 class FlashbotsBundleSender(BundleSender):
     def __init__(self, rpc_url: str, signer_account: LocalAccount, relay_url: str = "https://relay.flashbots.net"):
         self.w3 = Web3(HTTPProvider(rpc_url))
@@ -35,8 +31,6 @@ class FlashbotsBundleSender(BundleSender):
 
         simulation = self.w3.flashbots.simulate(fb_bundle, bundle.target_block)
         if simulation.get("error") or any(tx.get("error") for tx in simulation.get("results", [])):
-            return False
-        if _coinbase_diff_wei(simulation) < bundle.min_profit_wei:
             return False
 
         result = self.w3.flashbots.send_bundle(fb_bundle, target_block_number=bundle.target_block)

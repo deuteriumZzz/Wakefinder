@@ -17,15 +17,29 @@ victim's tx — not all providers do; this fails loudly (not silently) if yours
 doesn't, rather than shipping an unverified raw-tx reconstruction. Not
 runnable end-to-end without a funded testnet wallet + such a provider —
 validate there before touching mainnet capital.
+
+ponytail: swap processing is sequential (each opportunity's send() completes
+before the next is even nonce-assigned) — deliberately, not an oversight.
+Nonce is re-fetched fresh per attempt: a Flashbots-only bundle that never
+lands leaves no trace in the node's own mempool view, so a fresh
+get_transaction_count() naturally reuses the same nonce for a retried
+attempt and advances once a bundle actually lands. Processing concurrently
+would let two in-flight bundles grab the same nonce and race — fixing that
+needs a nonce-pool or a lock, which isn't worth the complexity for a bot
+that (per design) isn't colocated and isn't winning latency races anyway;
+sequential trades a small chance of missing an overlapping opportunity
+during one block for provably no nonce races.
 """
 
 import asyncio
+import logging
+import os
 import time
 
 from eth_account import Account
 from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
-from mevbot.chains.eth.abi import ROUTER_ABI
+from mevbot.chains.eth.abi import ERC20_ABI, ROUTER_ABI
 from mevbot.chains.eth.sender import FlashbotsBundleSender
 from mevbot.chains.eth.simulator import GAS_LIMIT, TwoPoolArbSimulator
 from mevbot.chains.eth.watcher import UniswapV2Watcher
@@ -33,7 +47,10 @@ from mevbot.common.config import get_settings
 from mevbot.common.interfaces import Bundle, PendingSwap, SimResult
 
 SLIPPAGE_BPS = 100  # 1% tolerance between simulation and on-chain execution
+BASE_PRIORITY_FEE_WEI = Web3.to_wei(2, "gwei")  # floor tip even when profit_share math rounds to ~0
 _ENCODER = Web3()  # provider-less: pure offline ABI encoding, never makes an RPC call
+
+logger = logging.getLogger("mevbot.eth")
 
 
 def _to_0x_hex(raw: bytes) -> str:
@@ -62,11 +79,20 @@ def _sign_leg(router_address: str, account, chain_id: int, nonce: int, max_fee: 
     return account.sign_transaction(tx).raw_transaction
 
 
-async def _gas_fees(w3: AsyncWeb3, max_gas_gwei: float) -> tuple[int, int]:
-    latest = await w3.eth.get_block("latest")
-    priority_fee = Web3.to_wei(2, "gwei")
-    max_fee = min(latest["baseFeePerGas"] * 2 + priority_fee, Web3.to_wei(max_gas_gwei, "gwei"))
+def _compute_fees(base_fee: int, max_gas_gwei: float, expected_profit_wei: int, profit_share_bps: int) -> tuple[int, int]:
+    """maxFeePerGas/maxPriorityFeePerGas, with the tip bid up toward a share of
+    captured profit — builders sort bundles by total value (fees + transfers),
+    so a flat minimal tip routinely loses the inclusion auction to a bundle
+    that bids closer to what it's actually worth."""
+    tip_pool = expected_profit_wei * profit_share_bps // 10_000
+    priority_fee = max(BASE_PRIORITY_FEE_WEI, tip_pool // (2 * GAS_LIMIT))
+    max_fee = min(base_fee * 2 + priority_fee, Web3.to_wei(max_gas_gwei, "gwei"))
     return max_fee, priority_fee
+
+
+async def _gas_fees(w3: AsyncWeb3, max_gas_gwei: float, expected_profit_wei: int, profit_share_bps: int) -> tuple[int, int]:
+    latest = await w3.eth.get_block("latest")
+    return _compute_fees(latest["baseFeePerGas"], max_gas_gwei, expected_profit_wei, profit_share_bps)
 
 
 def _build_bundle_legs(account, chain_id: int, nonce: int, max_fee: int, priority_fee: int, swap: PendingSwap, sim: SimResult) -> list[bytes]:
@@ -85,6 +111,20 @@ def _build_bundle_legs(account, chain_id: int, nonce: int, max_fee: int, priorit
     return [buy_leg, sell_leg]
 
 
+async def _has_sufficient_balance(w3: AsyncWeb3, account_address: str, token_in: str, amount_in: int, gas_reserve_wei: int) -> bool:
+    eth_balance = await w3.eth.get_balance(account_address)
+    if eth_balance < gas_reserve_wei:
+        logger.warning("insufficient ETH for gas: have=%d need=%d", eth_balance, gas_reserve_wei)
+        return False
+
+    token = w3.eth.contract(address=token_in, abi=ERC20_ABI)
+    token_balance = await token.functions.balanceOf(account_address).call()
+    if token_balance < amount_in:
+        logger.warning("insufficient token_in balance: have=%d need=%d token=%s", token_balance, amount_in, token_in)
+        return False
+    return True
+
+
 async def run(pool_registry: dict[tuple[str, str], str], reference_pools: dict[str, dict[str, str]], min_amount_in: int):
     settings = get_settings()
     account = Account.from_key(settings.eth_private_key.get_secret_value())
@@ -101,6 +141,10 @@ async def run(pool_registry: dict[tuple[str, str], str], reference_pools: dict[s
         )
 
         async for swap in watcher.watch():
+            if os.path.exists(settings.kill_switch_file):
+                logger.warning("kill switch file %s present — stopping", settings.kill_switch_file)
+                return
+
             sim = await simulator.simulate(swap)
             if not sim.profitable:
                 continue
@@ -108,25 +152,31 @@ async def run(pool_registry: dict[tuple[str, str], str], reference_pools: dict[s
             try:
                 victim_raw = await w3.eth.get_raw_transaction(swap.tx_hash)
             except Exception as exc:
-                print(f"get_raw_transaction unsupported/failed for {swap.tx_hash}: {exc!r} — "
-                      "your RPC provider likely doesn't support eth_getRawTransactionByHash; "
-                      "switch providers, this bot cannot build a bundle without it.")
+                logger.error(
+                    "get_raw_transaction failed for %s (%s) — your RPC provider likely doesn't "
+                    "support eth_getRawTransactionByHash; this bot cannot build a bundle without it.",
+                    swap.tx_hash, type(exc).__name__,
+                )
+                continue
+
+            max_fee, priority_fee = await _gas_fees(w3, settings.max_gas_gwei, sim.expected_profit_wei, settings.profit_share_bps)
+            gas_reserve_wei = 2 * GAS_LIMIT * max_fee
+            if not await _has_sufficient_balance(w3, account.address, swap.token_in, sim.amount_in, gas_reserve_wei):
                 continue
 
             block_number = await w3.eth.block_number
             nonce = await w3.eth.get_transaction_count(account.address, "pending")
-            max_fee, priority_fee = await _gas_fees(w3, settings.max_gas_gwei)
 
             buy_leg, sell_leg = _build_bundle_legs(account, chain_id, nonce, max_fee, priority_fee, swap, sim)
 
             bundle = Bundle(
                 raw_txs=[_to_0x_hex(victim_raw), _to_0x_hex(buy_leg), _to_0x_hex(sell_leg)],
                 target_block=block_number + 1,
-                min_profit_wei=sim.expected_profit_wei,
             )
             included = await sender.send(bundle)
-            print(f"swap={swap.tx_hash} profit_wei={sim.expected_profit_wei} included={included}")
+            logger.info("swap=%s profit_wei=%d included=%s", swap.tx_hash, sim.expected_profit_wei, included)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     asyncio.run(run(pool_registry={}, reference_pools={}, min_amount_in=10**18))

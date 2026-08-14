@@ -37,7 +37,6 @@ class Bundle:
 
     raw_txs: list[str]
     target_block: int
-    min_profit_wei: int = 0  # sender must re-check simulated profit against this before sending
 
 
 class MempoolWatcher(ABC):
