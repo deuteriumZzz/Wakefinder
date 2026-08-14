@@ -1,21 +1,23 @@
-"""Ethereum mempool watcher: subscribes to pending tx hashes, decodes Uniswap V2
-router swap calldata, and yields whale swaps above a configurable size.
+"""Watcher мемпула Ethereum: подписывается на хэши pending-транзакций,
+расшифровывает calldata свопов роутера Uniswap V2 и отдаёт свопы китов выше
+настраиваемого размера.
 
-ponytail: pool addresses are supplied by the caller (pool_registry), not derived
-via the factory CREATE2 salt — one dict lookup covers the pools you actually
-care about; add factory-based derivation if you need to watch arbitrary pairs.
+ponytail: адреса пулов передаёт вызывающий код (pool_registry), а не выводятся
+через CREATE2-salt фабрики — один lookup по словарю покрывает те пулы, которые
+реально важны; добавьте вывод через фабрику, если нужно следить за произвольными
+парами.
 
-ponytail: `_seen` is an unbounded set for the life of the process — fine for a
-bot you restart periodically; add LRU eviction if a long-running instance's
-memory becomes a real concern.
+ponytail: `_seen` — неограниченное множество на весь срок жизни процесса —
+нормально для бота, который периодически перезапускают; добавьте LRU-вытеснение,
+если для долгоживущего инстанса память станет реальной проблемой.
 """
 
 from collections.abc import AsyncIterator
 
 from web3 import AsyncWeb3
 
-from mevbot.chains.eth.abi import ROUTER_ABI
-from mevbot.common.interfaces import MempoolWatcher, PendingSwap
+from wakefinder.chains.eth.abi import ROUTER_ABI
+from wakefinder.common.interfaces import MempoolWatcher, PendingSwap
 
 SWAP_FUNCTIONS = {"swapExactTokensForTokens", "swapExactETHForTokens"}
 
@@ -70,9 +72,9 @@ class UniswapV2Watcher(MempoolWatcher):
 
             path = params["path"]
             if len(path) != 2:
-                # Multi-hop swaps don't move a single pool the way this bot's
-                # simulator models it — matching one against a pool the victim
-                # never touched would price a fictional mispricing.
+                # Многохоповые свопы не двигают один пул так, как это моделирует
+                # симулятор бота — сопоставление с пулом, которого кит не касался,
+                # оценило бы вымышленную неверную цену.
                 continue
 
             pool = self._pool_for(path[0], path[-1])

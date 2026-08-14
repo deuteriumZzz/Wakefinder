@@ -1,8 +1,8 @@
-from mevbot.common.amm import arb_profit, get_amount_out, optimal_arb
+from wakefinder.common.amm import arb_profit, get_amount_out, optimal_arb
 
 
 def test_get_amount_out_applies_fee():
-    # 1000 in, 1:1 pool -> out is slightly less than 1000 due to the 0.3% fee
+    # 1000 на входе, пул 1:1 -> на выходе чуть меньше 1000 из-за комиссии 0.3%
     out = get_amount_out(1000, 1_000_000, 1_000_000)
     assert 0 < out < 1000
 
@@ -13,14 +13,14 @@ def test_get_amount_out_empty_reserves_is_zero():
 
 
 def test_no_arb_when_pools_balanced_identically():
-    # same ratio on both sides -> no profitable trade size
+    # одинаковое соотношение в обоих пулах -> нет прибыльного размера сделки
     _, profit = optimal_arb(1_000_000, 1_000_000, 1_000_000, 1_000_000)
     assert profit == 0
 
 
 def test_arb_profit_when_buy_pool_is_cheap():
-    # buy pool has more `out` relative to `in` than sell pool -> buying there,
-    # selling in the sell pool, is profitable
+    # в buy-пуле больше `out` относительно `in`, чем в sell-пуле -> покупка там,
+    # продажа в sell-пуле — прибыльна
     amount, profit = optimal_arb(
         buy_reserve_in=1_000_000,
         buy_reserve_out=1_200_000,
@@ -29,12 +29,12 @@ def test_arb_profit_when_buy_pool_is_cheap():
     )
     assert amount > 0
     assert profit > 0
-    # optimal_arb's own accounting agrees with arb_profit for the amount it picked
+    # собственный расчёт optimal_arb совпадает с arb_profit для выбранной суммы
     assert arb_profit(amount, 1_000_000, 1_200_000, 1_000_000, 1_000_000) == profit
 
 
 def test_gas_cost_can_erase_an_otherwise_profitable_arb():
-    # a small, real gross-profitable opportunity...
+    # небольшая, реально прибыльная по gross возможность...
     amount, gross_profit = optimal_arb(
         buy_reserve_in=1_000_000,
         buy_reserve_out=1_010_000,
@@ -42,7 +42,7 @@ def test_gas_cost_can_erase_an_otherwise_profitable_arb():
         sell_reserve_in=1_000_000,
     )
     assert gross_profit > 0
-    # ...must not look profitable once gas costs more than the edge
+    # ...не должна выглядеть прибыльной, если газ стоит дороже выгоды
     _, net_profit = optimal_arb(
         buy_reserve_in=1_000_000,
         buy_reserve_out=1_010_000,

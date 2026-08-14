@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from mevbot.common.config import Settings
+from wakefinder.common.config import Settings
 
 KEY_A = "0x7413d6e6fe53a10645335f03b3fae74eaff8a21e65a0e7cbedcd53e8c1951004"
 KEY_B = "0xdb4622826f6ff3c67bac64e5417152afc8bd6a58a28318fd3be75a3d6c6d6e99"
@@ -27,7 +27,7 @@ def test_distinct_keys_allowed():
 
 
 def test_same_key_for_both_wallets_is_rejected():
-    with pytest.raises(ValidationError, match="same wallet"):
+    with pytest.raises(ValidationError, match="один и тот же кошелёк"):
         _settings(flashbots_signer_key=KEY_A)
 
 

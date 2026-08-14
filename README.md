@@ -1,48 +1,53 @@
-# mevbot
+# Wakefinder
 
-Standalone MEV searcher bot (mempool sniffing → AMM simulation → Flashbots/Jito bundle
-submission). Independent from BitbotBY — this is on-chain (ETH/Solana), BitbotBY is CEX/ccxt.
+Отдельный MEV searcher-бот (слежка за мемпулом → симуляция AMM → отправка бандла
+через Flashbots/Jito). Независим от BitbotBY — этот проект on-chain (ETH/Solana),
+BitbotBY — CEX/ccxt.
 
-Build order: Ethereum full cycle first, then Solana over the same `mevbot/common/interfaces.py`
-contracts (`MempoolWatcher`, `Simulator`, `BundleSender`).
+Порядок разработки: сначала полный цикл на Ethereum, затем Solana поверх тех же
+контрактов `wakefinder/common/interfaces.py` (`MempoolWatcher`, `Simulator`, `BundleSender`).
 
-## Setup
+## Установка
 
 ```bash
 pip install -e ".[dev]"
-cp .env.example .env  # fill in your own RPC/keys — never commit .env
+cp .env.example .env  # впишите свои RPC/ключи — никогда не коммитьте .env
 ```
 
-## Operational requirements (Ethereum path)
+## Операционные требования (путь Ethereum)
 
-- **RPC provider must support `eth_getRawTransactionByHash`.** Not universal —
-  the bot fails loudly (logs and skips) if yours doesn't. Verify before relying on it.
-- **Approve every router you might trade through** — the target router
-  (`ETH_ROUTER_ADDRESS`) *and* every reference router passed into
-  `reference_pools` — from `ETH_PRIVATE_KEY`'s wallet, for every token
-  involved. One-time setup, not part of the hot path.
-- `reference_pools` (passed to `run()`, not in `.env`) must map each watched
-  pool to a genuinely different DEX's pool for the same pair — a backrun
-  against a single pool alone isn't an arbitrage.
-- `MAX_CAPITAL_PER_BUNDLE_ETH` assumes `token_in` is 18-decimal (WETH). Don't
-  point this at a pair where `token_in` has different decimals until that's fixed.
+- **RPC-провайдер обязан поддерживать `eth_getRawTransactionByHash`.** Не
+  универсально — если ваш не поддерживает, бот падает громко (логирует и
+  пропускает возможность). Проверьте это заранее.
+- **Дайте approve каждому роутеру, через который может пройти сделка** —
+  целевому роутеру (`ETH_ROUTER_ADDRESS`) *и* каждому референсному роутеру,
+  переданному в `reference_pools` — от кошелька `ETH_PRIVATE_KEY`, на каждый
+  задействованный токен. Разовая настройка, не часть горячего пути.
+- `reference_pools` (передаётся в `run()`, не через `.env`) должен сопоставлять
+  каждый отслеживаемый пул с пулом той же пары на действительно другом DEX —
+  бэкран против одного-единственного пула не является арбитражем.
+- `MAX_CAPITAL_PER_BUNDLE_ETH` предполагает, что `token_in` — 18-decimal токен
+  (WETH). Не указывайте пару, где у `token_in` другое число decimals, пока это
+  не исправлено.
 
-## Safety
+## Безопасность
 
-- Start on testnet (Sepolia) — no real capital until the full cycle is validated there.
-- `MAX_GAS_GWEI` / `MAX_CAPITAL_PER_BUNDLE_ETH` in `.env` cap per-bundle risk;
-  `ETH_ROUTER_ADDRESS` is checked against an allowlist in `config.py` — an
-  unlisted router (typo or tampered `.env`) refuses to start.
-- The bot refuses to start if `ETH_PRIVATE_KEY` and `FLASHBOTS_SIGNER_KEY`
-  resolve to the same wallet — the signer key must never hold funds.
-- Default strategy is backrun/arbitrage, not sandwich (sandwich directly harms the
-  tracked trader — that's an explicit opt-in, not the default).
-- **Kill switch**: `touch .kill` (path configurable via `KILL_SWITCH_FILE`) to
-  stop the bot before its next action, no redeploy needed. `rm .kill` to resume.
-- Balance is checked before every bundle — both native ETH (covers gas for both
-  legs at the fee it's about to bid) and `token_in` — the bot skips the
-  opportunity rather than sign a transaction it can't afford.
-- Bundle inclusion tip scales with `PROFIT_SHARE_BPS` (default 90%) of the
-  opportunity's own captured profit, not a flat rate — bids close to what the
-  opportunity is actually worth, which is what it takes to win the block
-  builder's inclusion auction against other searchers.
+- Начинайте с тестнета (Sepolia) — никакого реального капитала, пока полный
+  цикл там не проверен.
+- `MAX_GAS_GWEI` / `MAX_CAPITAL_PER_BUNDLE_ETH` в `.env` ограничивают риск на
+  бандл; `ETH_ROUTER_ADDRESS` сверяется с allowlist в `config.py` —
+  неизвестный роутер (опечатка или подменённый `.env`) не даёт боту запуститься.
+- Бот отказывается стартовать, если `ETH_PRIVATE_KEY` и `FLASHBOTS_SIGNER_KEY`
+  указывают на один и тот же кошелёк — на ключе подписи никогда не должно быть средств.
+- Стратегия по умолчанию — backrun/арбитраж, не sandwich (sandwich напрямую
+  вредит отслеживаемому трейдеру — это осознанный опт-ин, не поведение по умолчанию).
+- **Kill switch**: `touch .kill` (путь настраивается через `KILL_SWITCH_FILE`),
+  чтобы остановить бота перед следующим действием, без передеплоя. `rm .kill`,
+  чтобы продолжить.
+- Баланс проверяется перед каждым бандлом — и нативный ETH (покрывает газ на
+  обе ноги по комиссии, которую бот собирается предложить), и `token_in` — бот
+  пропускает возможность, а не подписывает транзакцию, на которую не хватает средств.
+- Tip за включение бандла масштабируется от `PROFIT_SHARE_BPS` (по умолчанию
+  90%) захваченной прибыли самой возможности, а не фиксированная ставка —
+  предложение цены близко к реальной выгоде возможности — именно это нужно,
+  чтобы выиграть аукцион block builder'а за включение против других searcher-ботов.

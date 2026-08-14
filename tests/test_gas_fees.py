@@ -1,6 +1,6 @@
 from web3 import Web3
 
-from mevbot.chains.eth.main import BASE_PRIORITY_FEE_WEI, _compute_fees
+from wakefinder.chains.eth.main import BASE_PRIORITY_FEE_WEI, _compute_fees
 
 
 def test_falls_back_to_base_priority_fee_when_profit_share_is_tiny():

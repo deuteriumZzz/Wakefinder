@@ -1,6 +1,6 @@
-"""Minimal ABI fragments — Uniswap V2 Router/Pair (and compatible forks: Sushiswap etc).
-Extend with more router functions (swapTokensForExactTokens, ...*SupportingFeeOnTransferTokens)
-as needed; these two cover the common whale-swap case.
+"""Минимальные фрагменты ABI — Uniswap V2 Router/Pair (и совместимые форки: Sushiswap и т.п.).
+Расширяйте другими функциями роутера (swapTokensForExactTokens, ...*SupportingFeeOnTransferTokens)
+по мере необходимости; эти две покрывают типичный случай свопа кита.
 """
 
 ROUTER_ABI = [
