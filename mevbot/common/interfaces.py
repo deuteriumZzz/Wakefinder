@@ -16,10 +16,18 @@ class PendingSwap:
 
 @dataclass
 class SimResult:
-    """Result of simulating a strategy against a pending swap."""
+    """Result of simulating a strategy against a pending swap.
+
+    Carries everything needed to build the trade as-simulated — the executor
+    must not re-derive amounts/direction/venues itself (that mismatch is exactly
+    how a bot signs a different trade than the one it priced)."""
 
     profitable: bool
     expected_profit_wei: int
+    amount_in: int = 0
+    bought_amount: int = 0  # leg 1 output = leg 2 input
+    buy_router: str = ""
+    sell_router: str = ""
     reason: str = ""
 
 
@@ -29,6 +37,7 @@ class Bundle:
 
     raw_txs: list[str]
     target_block: int
+    min_profit_wei: int = 0  # sender must re-check simulated profit against this before sending
 
 
 class MempoolWatcher(ABC):
@@ -39,7 +48,7 @@ class MempoolWatcher(ABC):
 
 class Simulator(ABC):
     @abstractmethod
-    def simulate(self, swap: PendingSwap) -> SimResult:
+    async def simulate(self, swap: PendingSwap) -> SimResult:
         """Estimate profit for reacting to this swap, before spending gas."""
 
 
