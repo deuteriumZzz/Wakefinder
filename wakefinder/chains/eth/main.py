@@ -128,7 +128,12 @@ async def _has_sufficient_balance(w3: AsyncWeb3, account_address: str, token_in:
     return True
 
 
-async def run(pool_registry: dict[tuple[str, str], str], reference_pools: dict[str, dict[str, str]], min_amount_in: int):
+async def run(
+    pool_registry: dict[tuple[str, str], str],
+    reference_pools: dict[str, dict[str, str]],
+    min_amount_in: int,
+    watched_wallets: frozenset[str] = frozenset(),
+):
     settings = get_settings()
     account = Account.from_key(settings.eth_private_key.get_secret_value())
     fb_signer = Account.from_key(settings.flashbots_signer_key.get_secret_value())
@@ -136,7 +141,7 @@ async def run(pool_registry: dict[tuple[str, str], str], reference_pools: dict[s
     provider = WebsocketProviderV2(settings.eth_rpc_ws_url.get_secret_value())
     async with AsyncWeb3.persistent_websocket(provider) as w3:
         chain_id = await w3.eth.chain_id
-        watcher = UniswapV2Watcher(w3, settings.eth_router_address, pool_registry, min_amount_in)
+        watcher = UniswapV2Watcher(w3, settings.eth_router_address, pool_registry, min_amount_in, watched_wallets)
         simulator = TwoPoolArbSimulator(w3, settings.eth_router_address, reference_pools)
         sender = FlashbotsBundleSender(
             rpc_url=settings.eth_rpc_http_url.get_secret_value(),

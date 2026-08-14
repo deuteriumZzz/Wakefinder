@@ -1,6 +1,9 @@
 """Watcher мемпула Ethereum: подписывается на хэши pending-транзакций,
-расшифровывает calldata свопов роутера Uniswap V2 и отдаёт свопы китов выше
-настраиваемого размера.
+расшифровывает calldata свопов роутера Uniswap V2 и отдаёт свопы, прошедшие
+любой из двух фильтров: размер (`min_amount_in`) ИЛИ отправитель из
+`watched_wallets` (конкретные отслеживаемые кошельки — киты/игроки, список
+которых берётся извне: вручную составленный watchlist или внешняя аналитика
+типа Nansen/Arkham; сам по себе блокчейн не размечает адреса по "умности").
 
 ponytail: адреса пулов передаёт вызывающий код (pool_registry), а не выводятся
 через CREATE2-salt фабрики — один lookup по словарю покрывает те пулы, которые
@@ -29,11 +32,13 @@ class UniswapV2Watcher(MempoolWatcher):
         router_address: str,
         pool_registry: dict[tuple[str, str], str],
         min_amount_in: int,
+        watched_wallets: frozenset[str] = frozenset(),
     ):
         self.w3 = w3
         self.router = w3.eth.contract(address=router_address, abi=ROUTER_ABI)
         self.pool_registry = pool_registry
         self.min_amount_in = min_amount_in
+        self.watched_wallets = {a.lower() for a in watched_wallets}
         self._seen: set[str] = set()
 
     def _pool_for(self, token_in: str, token_out: str) -> str | None:
@@ -67,7 +72,10 @@ class UniswapV2Watcher(MempoolWatcher):
                 continue
 
             amount_in = params.get("amountIn", tx.get("value", 0))
-            if amount_in < self.min_amount_in:
+            sender = (tx.get("from") or "").lower()
+            is_large_enough = amount_in >= self.min_amount_in
+            is_watched_wallet = sender in self.watched_wallets
+            if not (is_large_enough or is_watched_wallet):
                 continue
 
             path = params["path"]
