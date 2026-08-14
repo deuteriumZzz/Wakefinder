@@ -36,6 +36,9 @@ from spl.token.instructions import get_associated_token_address
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.simulator import TwoPoolArbSimulator
 from wakefinder.chains.solana.watcher import RaydiumVaultWatcher
+from wakefinder.common import trade_log
+from wakefinder.common.adaptive_tip import AdaptiveTipController
+from wakefinder.common.allowlist import validate_token_allowlist
 from wakefinder.common.config import get_settings
 from wakefinder.common.interfaces import Bundle, PendingSwap, SimResult
 
@@ -81,7 +84,22 @@ async def _has_sufficient_balance(client: AsyncClient, owner: Pubkey, token_mint
     return True
 
 
-async def run(pools: dict[str, dict[str, str]], reference_pools: dict[str, dict[str, str]], min_amount_in: int):
+def _all_configured_tokens(reference_pools: dict[str, dict[str, str]]) -> set[str]:
+    tokens: set[str] = set()
+    for ref in reference_pools.values():
+        tokens.add(ref["base_mint"])
+        tokens.add(ref["quote_mint"])
+    return tokens
+
+
+async def run(
+    pools: dict[str, dict[str, str]],
+    reference_pools: dict[str, dict[str, str]],
+    min_amount_in: int,
+    token_allowlist: frozenset[str] = frozenset(),
+):
+    validate_token_allowlist(_all_configured_tokens(reference_pools), token_allowlist)
+
     settings = get_settings()
     if not (settings.solana_rpc_ws_url and settings.solana_rpc_http_url and settings.solana_private_key):
         raise RuntimeError(
@@ -96,6 +114,8 @@ async def run(pools: dict[str, dict[str, str]], reference_pools: dict[str, dict[
     watcher = RaydiumVaultWatcher(settings.solana_rpc_ws_url.get_secret_value(), pools, min_amount_in)
     simulator = TwoPoolArbSimulator(client, reference_pools)
     sender = JitoBundleSender(settings.jito_block_engine_url, keypair)
+    tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
+    consecutive_failures = 0
 
     async for swap in watcher.watch():
         if os.path.exists(settings.kill_switch_file):
@@ -131,7 +151,7 @@ async def run(pools: dict[str, dict[str, str]], reference_pools: dict[str, dict[
             continue
 
         tip_account = await sender.get_tip_account()
-        tip_lamports = _tip_lamports(sim.expected_profit_wei, settings.profit_share_bps)
+        tip_lamports = _tip_lamports(sim.expected_profit_wei, tip.current_bps)
         blockhash = (await client.get_latest_blockhash()).value.blockhash
 
         buy_tx = _sign_unsigned_tx(buy_unsigned, keypair)
@@ -144,6 +164,18 @@ async def run(pools: dict[str, dict[str, str]], reference_pools: dict[str, dict[
         )
         included = await sender.send(bundle)
         logger.info("swap=%s profit_lamports=%d included=%s", swap.tx_hash, sim.expected_profit_wei, included)
+
+        tip.record_outcome(included)
+        trade_log.log_attempt(settings.trade_log_file, "solana", swap.pool_address, sim.expected_profit_wei, included, [swap.tx_hash])
+
+        consecutive_failures = 0 if included else consecutive_failures + 1
+        if consecutive_failures >= settings.max_consecutive_failures:
+            logger.critical(
+                "%d бандлов подряд не попали в блок — включаю kill switch, проверьте бота вручную",
+                consecutive_failures,
+            )
+            open(settings.kill_switch_file, "a").close()  # блокирующий вызов ок: run() сразу завершается
+            return
 
 
 if __name__ == "__main__":

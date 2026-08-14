@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     jito_block_engine_url: str = "https://mainnet.block-engine.jito.wtf/api/v1"
     max_capital_per_bundle_sol: float = 0.5
 
+    # Автостоп: после стольких подряд неотправленных/непопавших в блок бандлов
+    # бот сам ставит kill switch и останавливается — не столько защита от
+    # прямой потери денег (неотправленный бандл ничего не стоит), сколько
+    # сигнал "что-то системно не так" (логическая ошибка, вечный проигрыш
+    # аукциона), которую нельзя оставлять человеку заметить самому.
+    max_consecutive_failures: int = 5
+
+    # Append-only лог каждой попытки (даже неприбыльной — на будущее для
+    # анализа) — не полноценный PnL-дашборд, а сырые данные для него.
+    trade_log_file: str = "trades.jsonl"
+
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
         if self.eth_router_address.lower() not in KNOWN_ROUTERS:

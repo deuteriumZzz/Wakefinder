@@ -46,6 +46,9 @@ from wakefinder.chains.eth.abi import ERC20_ABI, ROUTER_ABI
 from wakefinder.chains.eth.sender import FlashbotsBundleSender
 from wakefinder.chains.eth.simulator import GAS_LIMIT, TwoPoolArbSimulator
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
+from wakefinder.common import trade_log
+from wakefinder.common.adaptive_tip import AdaptiveTipController
+from wakefinder.common.allowlist import validate_token_allowlist
 from wakefinder.common.config import get_settings
 from wakefinder.common.interfaces import Bundle, PendingSwap, SimResult
 
@@ -128,15 +131,29 @@ async def _has_sufficient_balance(w3: AsyncWeb3, account_address: str, token_in:
     return True
 
 
+def _all_configured_tokens(
+    pool_registry: dict[tuple[str, str], str], reference_pools: dict[str, dict[str, str]]
+) -> set[str]:
+    tokens = {t for pair in pool_registry for t in pair}
+    for ref in reference_pools.values():
+        tokens.update({v for k, v in ref.items() if k != "pool" and k != "router"})
+    return tokens
+
+
 async def run(
     pool_registry: dict[tuple[str, str], str],
     reference_pools: dict[str, dict[str, str]],
     min_amount_in: int,
     watched_wallets: frozenset[str] = frozenset(),
+    token_allowlist: frozenset[str] = frozenset(),
 ):
+    validate_token_allowlist(_all_configured_tokens(pool_registry, reference_pools), token_allowlist)
+
     settings = get_settings()
     account = Account.from_key(settings.eth_private_key.get_secret_value())
     fb_signer = Account.from_key(settings.flashbots_signer_key.get_secret_value())
+    tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
+    consecutive_failures = 0
 
     provider = WebsocketProviderV2(settings.eth_rpc_ws_url.get_secret_value())
     async with AsyncWeb3.persistent_websocket(provider) as w3:
@@ -167,7 +184,7 @@ async def run(
                 )
                 continue
 
-            max_fee, priority_fee = await _gas_fees(w3, settings.max_gas_gwei, sim.expected_profit_wei, settings.profit_share_bps)
+            max_fee, priority_fee = await _gas_fees(w3, settings.max_gas_gwei, sim.expected_profit_wei, tip.current_bps)
             gas_reserve_wei = 2 * GAS_LIMIT * max_fee
             if not await _has_sufficient_balance(w3, account.address, swap.token_in, sim.amount_in, gas_reserve_wei):
                 continue
@@ -183,6 +200,18 @@ async def run(
             )
             included = await sender.send(bundle)
             logger.info("swap=%s profit_wei=%d included=%s", swap.tx_hash, sim.expected_profit_wei, included)
+
+            tip.record_outcome(included)
+            trade_log.log_attempt(settings.trade_log_file, "eth", swap.pool_address, sim.expected_profit_wei, included, [swap.tx_hash])
+
+            consecutive_failures = 0 if included else consecutive_failures + 1
+            if consecutive_failures >= settings.max_consecutive_failures:
+                logger.critical(
+                    "%d бандлов подряд не попали в блок — включаю kill switch, проверьте бота вручную",
+                    consecutive_failures,
+                )
+                open(settings.kill_switch_file, "a").close()  # блокирующий вызов ок: run() сразу завершается, цикл никому больше не нужен
+                return
 
 
 if __name__ == "__main__":
