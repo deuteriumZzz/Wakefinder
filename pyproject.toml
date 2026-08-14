@@ -6,6 +6,10 @@ dependencies = [
     "pydantic-settings>=2.0",
     "web3>=6.15",
     "flashbots>=2.0",
+    "solana>=0.36",
+    "solders>=0.26",
+    "jupiter-python-sdk>=0.0.2",
+    "jito-py-rpc>=0.1.5",
 ]
 
 [project.optional-dependencies]
@@ -13,3 +17,9 @@ dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]
 include = ["wakefinder*"]
+
+[tool.pytest.ini_options]
+# anchorpy (транзитивная зависимость jupiter_python_sdk/solana) регистрирует
+# свой pytest-плагин, который тянет pytest-asyncio/pytest-xprocess — нам они
+# не нужны, просто отключаем автозагрузку плагина.
+addopts = "-p no:pytest_anchorpy"

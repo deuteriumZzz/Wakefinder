@@ -38,12 +38,20 @@ class Settings(BaseSettings):
     # продолжить.
     kill_switch_file: str = ".kill"
 
-    # Доля чистой прибыли, которую ставим сверху как priority fee, чтобы
-    # конкурировать в аукционе block builder'а за включение — билдеры
-    # сортируют бандлы по суммарной ценности (priority fee + любые явные
-    # переводы), так что бандл, не предлагающий цену близкую к своей реальной
-    # выгоде, обычно проигрывает тому, кто предлагает.
+    # Доля чистой прибыли, которую ставим сверху как priority fee (ETH) или
+    # Jito-tip (Solana), чтобы конкурировать за включение — билдеры сортируют
+    # бандлы по суммарной ценности, так что бандл, не предлагающий цену близкую
+    # к своей реальной выгоде, обычно проигрывает тому, кто предлагает.
     profit_share_bps: int = Field(default=9000, ge=0, le=10_000)
+
+    # Solana — опционально: можно гонять только ETH-путь без этих полей.
+    # solana_private_key — base58, отдельное keyspace от ETH-ключей, не
+    # взаимозаменяемы в принципе (не тот же кошелёк технически невозможен).
+    solana_rpc_ws_url: SecretStr | None = None
+    solana_rpc_http_url: SecretStr | None = None
+    solana_private_key: SecretStr | None = None
+    jito_block_engine_url: str = "https://mainnet.block-engine.jito.wtf/api/v1"
+    max_capital_per_bundle_sol: float = 0.5
 
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
