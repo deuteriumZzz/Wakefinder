@@ -7,6 +7,8 @@ BitbotBY — CEX/ccxt.
 Порядок разработки: сначала полный цикл на Ethereum, затем Solana поверх тех же
 контрактов `wakefinder/common/interfaces.py` (`MempoolWatcher`, `Simulator`, `BundleSender`).
 
+Что делать при срабатывании kill switch/drawdown/других защит — см. [RUNBOOK.md](RUNBOOK.md).
+
 ## Установка
 
 ```bash
@@ -61,6 +63,14 @@ cp .env.example .env  # впишите свои RPC/ключи — никогд�
   комментарии внутри юнитов про замену `ExecStart` на свою обёртку с реальными
   пулами/watchlist (голый `python -m wakefinder.chains.*` запускается с
   пустыми `pool_registry`/`watched_wallets` — это smoke-test заглушка).
+
+## CI и контейнеризация (Tier 3)
+
+- **CI** (`.github/workflows/ci.yml`) — на каждый push/PR прогоняет весь
+  pytest-suite и `py_compile` по всему пакету.
+- **Docker** (`Dockerfile`) — один образ на все 4 процесса, конкретный
+  модуль выбирается командой при `docker run` (см. комментарий в файле).
+- Инцидент-runbook — [RUNBOOK.md](RUNBOOK.md).
 
 ## Операционные требования (путь Ethereum)
 
