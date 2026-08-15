@@ -481,6 +481,19 @@ Solana сознательно не реализован тем же способ
 - **CLI-дашборд**: `python -m wakefinder.dashboard` — печатает открытые позиции
   (ETH/Solana) и статистику по кошелькам в терминал. Переиспользует
   `wallet_stats.py`, никакого веб-сервера.
+- **Веб-дашборд** (`wakefinder/web.py`, опциональная зависимость): лёгкий
+  FastAPI-сервер, серверный HTML без SPA/сборки — визуальный слой над теми
+  же данными (`wallet_stats.py`/`price_feed.py`/позиции/`killswitch.py`/
+  `heartbeat.py`), ничего нового не хранит. Плюс метрики
+  (`wakefinder/common/metrics.py`): fill rate и точность симуляции
+  (`realized_profit` против `expected_profit`, см. "Сверка исполнения" выше)
+  по каждой сети. Установка и запуск:
+  ```bash
+  pip install -e ".[web]"
+  uvicorn wakefinder.web:app --reload
+  ```
+  Открыть `http://127.0.0.1:8000`. Торговые процессы не знают о существовании
+  этого модуля и не зависят от него — можно не устанавливать `[web]` вовсе.
 - **USD-оценка** (`wakefinder/common/price_feed.py`): дашборд подтягивает
   курс ETH/SOL с публичного CoinGecko endpoint (без API-ключа) и показывает
   `net_pnl~` ещё и в `$` рядом с нативными единицами — `--no-usd`, чтобы

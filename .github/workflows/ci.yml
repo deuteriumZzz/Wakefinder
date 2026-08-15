@@ -15,7 +15,7 @@ jobs:
           python-version: "3.11"
       - uses: foundry-rs/foundry-toolchain@v1
       - run: pip install --upgrade pip setuptools
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,web]"
       # tests/test_fork_integration.py форкает публичный RPC (см. FORK_RPC_URL
       # в файле) — если сеть недоступна из раннера, тесты сами skip'аются, не failed.
       - run: python -m pytest tests/ -q
