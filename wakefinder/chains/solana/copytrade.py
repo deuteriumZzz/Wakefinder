@@ -34,6 +34,7 @@ from wakefinder.chains.solana.wallet_watcher import WalletSwapWatcher
 from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
+from wakefinder.common.canary import CanaryController
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
 from wakefinder.common.drawdown import check_drawdown
@@ -184,6 +185,7 @@ async def run(
     positions = _load_positions(settings.solana_copytrade_positions_file)
     positions_lock = asyncio.Lock()
     consensus = ConsensusTracker(settings.copytrade_min_consensus_wallets, settings.copytrade_consensus_window_seconds)
+    canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     last_drawdown_check = 0.0
 
     watcher = WalletSwapWatcher(settings.solana_rpc_ws_url.get_secret_value(), client, watched_wallets)
@@ -208,6 +210,9 @@ async def run(
             now = time.time()
             if now - last_drawdown_check >= settings.drawdown_check_interval_seconds:
                 last_drawdown_check = now
+                fraction = canary.update(settings.trade_log_file, "solana")
+                if fraction < 1.0:
+                    logger.info("canary: текущий размер позиции = %.0f%% от полного (разгон по мере накопления сделок)", fraction * 100)
                 async with positions_lock:
                     positions_snapshot = dict(positions)
                 unrealized = await _unrealized_pnl(jupiter, positions_snapshot)

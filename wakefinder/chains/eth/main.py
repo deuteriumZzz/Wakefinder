@@ -48,6 +48,7 @@ from wakefinder.chains.eth.simulator import GAS_LIMIT, TwoPoolArbSimulator
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
 from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
+from wakefinder.common.canary import CanaryController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.allowlist import validate_not_denylisted, validate_token_allowlist
@@ -159,6 +160,7 @@ async def run(
     account = Account.from_key(settings.resolved_eth_private_key())
     fb_signer = Account.from_key(settings.resolved_flashbots_signer_key())
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
+    canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     consecutive_failures = 0
     last_drawdown_check = 0.0
     heartbeat_path = os.path.join(settings.heartbeat_dir, "eth_arb.heartbeat")
@@ -185,6 +187,9 @@ async def run(
             now = time.time()
             if now - last_drawdown_check >= settings.drawdown_check_interval_seconds:
                 last_drawdown_check = now
+                fraction = canary.update(settings.trade_log_file, "eth")
+                if fraction < 1.0:
+                    logger.info("canary: текущий размер позиции = %.0f%% от полного (разгон по мере накопления сделок)", fraction * 100)
                 status = check_drawdown(settings.trade_log_file, "eth", settings.drawdown_window_seconds, int(settings.max_drawdown_eth * 10**18))
                 if status.breached:
                     logger.critical("просадка за окно %d wei превысила лимит — включаю kill switch", status.realized_pnl)

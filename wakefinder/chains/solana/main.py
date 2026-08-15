@@ -39,6 +39,7 @@ from wakefinder.chains.solana.simulator import TwoPoolArbSimulator
 from wakefinder.chains.solana.watcher import RaydiumVaultWatcher
 from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
+from wakefinder.common.canary import CanaryController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.allowlist import validate_not_denylisted, validate_token_allowlist
 from wakefinder.common.config import get_settings
@@ -122,6 +123,7 @@ async def run(
     simulator = TwoPoolArbSimulator(client, reference_pools, settings.solana_wsol_address, jupiter)
     sender = JitoBundleSender(settings.jito_block_engine_url, keypair)
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
+    canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     consecutive_failures = 0
     last_drawdown_check = 0.0
     heartbeat_path = os.path.join(settings.heartbeat_dir, "solana_arb.heartbeat")
@@ -137,6 +139,9 @@ async def run(
         now = time.time()
         if now - last_drawdown_check >= settings.drawdown_check_interval_seconds:
             last_drawdown_check = now
+            fraction = canary.update(settings.trade_log_file, "solana")
+            if fraction < 1.0:
+                logger.info("canary: текущий размер позиции = %.0f%% от полного (разгон по мере накопления сделок)", fraction * 100)
             status = check_drawdown(settings.trade_log_file, "solana", settings.drawdown_window_seconds, int(settings.max_drawdown_sol * 10**9))
             if status.breached:
                 logger.critical("просадка за окно %d lamports превысила лимит — включаю kill switch", status.realized_pnl)

@@ -144,6 +144,12 @@ class Settings(BaseSettings):
     heartbeat_dir: str = "."
     heartbeat_interval_seconds: float = 30
 
+    # Поэтапный ввод капитала (см. common/canary.py) — по умолчанию выключен
+    # (1.0 = сразу полный размер), включается явно в профиле для нового
+    # watched_wallets-набора/пары, которым ещё не доверяете на полную.
+    canary_start_fraction: float = Field(default=1.0, gt=0, le=1.0)
+    canary_ramp_trades: int = Field(default=20, ge=0)
+
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
         if self.eth_router_address.lower() not in KNOWN_ROUTERS:
