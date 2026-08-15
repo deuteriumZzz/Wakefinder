@@ -39,7 +39,9 @@ from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
+from wakefinder.common.position_sizing import win_rate_size_multiplier
 from wakefinder.common.reconnect import with_reconnect
+from wakefinder.common.wallet_stats import compute_wallet_stats
 
 SLIPPAGE_BPS = 100
 
@@ -262,7 +264,18 @@ async def run(
                 continue
             consensus.clear(swap.token_out)
 
-            amount_in = int(balance * settings.copytrade_size_pct / 100)
+            wallet_stats = compute_wallet_stats(settings.trade_log_file).get(swap.sender.lower())
+            multiplier = (
+                win_rate_size_multiplier(
+                    wallet_stats.win_rate, wallet_stats.exits,
+                    settings.copytrade_sizing_min_trades, settings.copytrade_sizing_min_multiplier, settings.copytrade_sizing_max_multiplier,
+                )
+                if wallet_stats else 1.0
+            )
+            if multiplier != 1.0:
+                logger.info("win-rate множитель размера для %s: %.2fx (win_rate=%.0f%%, сделок=%d)", swap.sender, multiplier, wallet_stats.win_rate * 100, wallet_stats.exits)
+
+            amount_in = int(balance * settings.copytrade_size_pct * multiplier / 100)
             exposure_cap = int(balance * settings.copytrade_max_total_exposure_pct / 100)
             if current_exposure + amount_in > exposure_cap:
                 logger.info(

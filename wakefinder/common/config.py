@@ -150,6 +150,12 @@ class Settings(BaseSettings):
     canary_start_fraction: float = Field(default=1.0, gt=0, le=1.0)
     canary_ramp_trades: int = Field(default=20, ge=0)
 
+    # Корректировка размера по win rate конкретного watched-кошелька (см.
+    # common/position_sizing.py) — множитель вокруг 1.0 поверх copytrade_size_pct.
+    copytrade_sizing_min_trades: int = Field(default=5, ge=1)
+    copytrade_sizing_min_multiplier: float = Field(default=0.25, gt=0)
+    copytrade_sizing_max_multiplier: float = Field(default=1.5, gt=0)
+
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
         if self.eth_router_address.lower() not in KNOWN_ROUTERS:
