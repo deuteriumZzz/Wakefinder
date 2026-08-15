@@ -21,6 +21,7 @@ class WalletStats:
     exits: int
     net_pnl_estimate: int  # сумма exit-сумм минус сумма entry-сумм, приблизительно
     win_rate: float  # доля exit-записей с положительной оценкой profit
+    chain: str = ""  # из record["chain"] — нужен, чтобы правильно перевести net_pnl_estimate в USD (разные decimals/цена у ETH и Solana)
 
 
 def compute_wallet_stats(trade_log_path: str) -> dict[str, WalletStats]:
@@ -32,6 +33,7 @@ def compute_wallet_stats(trade_log_path: str) -> dict[str, WalletStats]:
     entries_count: dict[str, int] = {}
     exits_count: dict[str, int] = {}
     exit_wins: dict[str, int] = {}
+    wallet_chain: dict[str, str] = {}
 
     with open(trade_log_path) as f:
         for line in f:
@@ -49,6 +51,7 @@ def compute_wallet_stats(trade_log_path: str) -> dict[str, WalletStats]:
 
             strategy = record.get("strategy", "arb")
             amount = record.get("expected_profit", 0)
+            wallet_chain[wallet] = record.get("chain", "")
 
             if strategy == "copytrade_entry":
                 entries_sum[wallet] = entries_sum.get(wallet, 0) - amount
@@ -69,5 +72,6 @@ def compute_wallet_stats(trade_log_path: str) -> dict[str, WalletStats]:
             exits=exits,
             net_pnl_estimate=entries_sum.get(wallet, 0) + exits_sum.get(wallet, 0),
             win_rate=(exit_wins.get(wallet, 0) / exits) if exits else 0.0,
+            chain=wallet_chain.get(wallet, ""),
         )
     return result
