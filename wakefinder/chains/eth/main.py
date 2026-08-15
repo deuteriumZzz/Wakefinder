@@ -155,8 +155,8 @@ async def run(
     validate_not_denylisted(_all_configured_tokens(pool_registry, reference_pools), token_denylist)
 
     settings = get_settings()
-    account = Account.from_key(settings.eth_private_key.get_secret_value())
-    fb_signer = Account.from_key(settings.flashbots_signer_key.get_secret_value())
+    account = Account.from_key(settings.resolved_eth_private_key())
+    fb_signer = Account.from_key(settings.resolved_flashbots_signer_key())
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
     consecutive_failures = 0
     last_drawdown_check = 0.0

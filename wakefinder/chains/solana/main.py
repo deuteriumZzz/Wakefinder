@@ -107,13 +107,13 @@ async def run(
     validate_not_denylisted(_all_configured_tokens(reference_pools), token_denylist)
 
     settings = get_settings()
-    if not (settings.solana_rpc_ws_url and settings.solana_rpc_http_url and settings.solana_private_key):
+    if not (settings.solana_rpc_ws_url and settings.solana_rpc_http_url and (settings.solana_private_key or settings.solana_private_key_file)):
         raise RuntimeError(
-            "SOLANA_RPC_WS_URL / SOLANA_RPC_HTTP_URL / SOLANA_PRIVATE_KEY не настроены — "
+            "SOLANA_RPC_WS_URL / SOLANA_RPC_HTTP_URL / SOLANA_PRIVATE_KEY(_FILE) не настроены — "
             "Solana-путь не может стартовать без них"
         )
 
-    keypair = Keypair.from_base58_string(settings.solana_private_key.get_secret_value())
+    keypair = Keypair.from_base58_string(settings.resolved_solana_private_key())
     client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
     jupiter = Jupiter(client, keypair)
 

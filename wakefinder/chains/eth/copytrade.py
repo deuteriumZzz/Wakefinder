@@ -250,7 +250,7 @@ async def run(
     token_denylist: frozenset[str] = frozenset(),
 ):
     settings = get_settings()
-    account = Account.from_key(settings.eth_private_key.get_secret_value())
+    account = Account.from_key(settings.resolved_eth_private_key())
 
     positions = _load_positions(settings.copytrade_positions_file)
     positions_lock = asyncio.Lock()

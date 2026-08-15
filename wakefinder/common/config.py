@@ -4,6 +4,7 @@ from eth_account import Account
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from wakefinder.common.keystore import decrypt_from_file
 from wakefinder.common.killswitch import DEFAULT_PATH as DEFAULT_KILL_SWITCH_PATH
 
 # Роутеры, на которые боту разрешено указывать. eth_router_address всё равно
@@ -30,8 +31,15 @@ class Settings(BaseSettings):
     eth_rpc_http_url: SecretStr
     eth_router_address: str = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"  # Uniswap V2 Router02
     eth_weth_address: str = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
-    eth_private_key: SecretStr
-    flashbots_signer_key: SecretStr
+    # Ровно один источник на ключ: plaintext ИЛИ зашифрованный файл (см.
+    # common/keystore.py) — не оба и не ни одного. *_KEY_FILE + пассфраза в
+    # WALLET_KEY_PASSPHRASE — альтернатива голому ключу в .env; шифрует
+    # `python -m wakefinder.common.keystore <path>`.
+    eth_private_key: SecretStr | None = None
+    eth_private_key_file: str | None = None
+    flashbots_signer_key: SecretStr | None = None
+    flashbots_signer_key_file: str | None = None
+    wallet_key_passphrase: SecretStr | None = None
 
     max_gas_gwei: float = 50
     max_capital_per_bundle_eth: float = 0.05
@@ -55,6 +63,7 @@ class Settings(BaseSettings):
     solana_rpc_ws_url: SecretStr | None = None
     solana_rpc_http_url: SecretStr | None = None
     solana_private_key: SecretStr | None = None
+    solana_private_key_file: str | None = None
     solana_wsol_address: str = "So11111111111111111111111111111111111111112"
     jito_block_engine_url: str = "https://mainnet.block-engine.jito.wtf/api/v1"
     max_capital_per_bundle_sol: float = 0.5
@@ -137,9 +146,36 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _check_key_sources(self) -> "Settings":
+        if (self.eth_private_key_file or self.flashbots_signer_key_file or self.solana_private_key_file) and not self.wallet_key_passphrase:
+            raise ValueError("WALLET_KEY_PASSPHRASE обязателен, если используется любой *_KEY_FILE")
+        if bool(self.eth_private_key) == bool(self.eth_private_key_file):
+            raise ValueError("укажите ровно один источник ключа: ETH_PRIVATE_KEY или ETH_PRIVATE_KEY_FILE")
+        if bool(self.flashbots_signer_key) == bool(self.flashbots_signer_key_file):
+            raise ValueError("укажите ровно один источник ключа: FLASHBOTS_SIGNER_KEY или FLASHBOTS_SIGNER_KEY_FILE")
+        if self.solana_private_key and self.solana_private_key_file:
+            raise ValueError("укажите не более одного источника ключа: SOLANA_PRIVATE_KEY или SOLANA_PRIVATE_KEY_FILE")
+        return self
+
+    def resolved_eth_private_key(self) -> str:
+        if self.eth_private_key_file:
+            return decrypt_from_file(self.eth_private_key_file, self.wallet_key_passphrase.get_secret_value())
+        return self.eth_private_key.get_secret_value()
+
+    def resolved_flashbots_signer_key(self) -> str:
+        if self.flashbots_signer_key_file:
+            return decrypt_from_file(self.flashbots_signer_key_file, self.wallet_key_passphrase.get_secret_value())
+        return self.flashbots_signer_key.get_secret_value()
+
+    def resolved_solana_private_key(self) -> str | None:
+        if self.solana_private_key_file:
+            return decrypt_from_file(self.solana_private_key_file, self.wallet_key_passphrase.get_secret_value())
+        return self.solana_private_key.get_secret_value() if self.solana_private_key else None
+
+    @model_validator(mode="after")
     def _check_keys_are_distinct_wallets(self) -> "Settings":
-        exec_address = Account.from_key(self.eth_private_key.get_secret_value()).address
-        signer_address = Account.from_key(self.flashbots_signer_key.get_secret_value()).address
+        exec_address = Account.from_key(self.resolved_eth_private_key()).address
+        signer_address = Account.from_key(self.resolved_flashbots_signer_key()).address
         if exec_address == signer_address:
             raise ValueError(
                 "eth_private_key и flashbots_signer_key указывают на один и тот же кошелёк — "

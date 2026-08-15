@@ -10,6 +10,7 @@ dependencies = [
     "solders>=0.26",
     "jupiter-python-sdk>=0.0.2",
     "jito-py-rpc>=0.1.5",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
