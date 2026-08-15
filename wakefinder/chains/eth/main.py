@@ -50,7 +50,7 @@ from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.drawdown import check_drawdown
-from wakefinder.common.allowlist import validate_token_allowlist
+from wakefinder.common.allowlist import validate_not_denylisted, validate_token_allowlist
 from wakefinder.common.config import get_settings
 from wakefinder.common.interfaces import Bundle, PendingSwap, SimResult
 from wakefinder.common.reconnect import with_reconnect
@@ -149,8 +149,10 @@ async def run(
     min_amount_in: int,
     watched_wallets: frozenset[str] = frozenset(),
     token_allowlist: frozenset[str] = frozenset(),
+    token_denylist: frozenset[str] = frozenset(),
 ):
     validate_token_allowlist(_all_configured_tokens(pool_registry, reference_pools), token_allowlist)
+    validate_not_denylisted(_all_configured_tokens(pool_registry, reference_pools), token_denylist)
 
     settings = get_settings()
     account = Account.from_key(settings.eth_private_key.get_secret_value())

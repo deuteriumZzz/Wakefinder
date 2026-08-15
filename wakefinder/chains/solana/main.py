@@ -40,7 +40,7 @@ from wakefinder.chains.solana.watcher import RaydiumVaultWatcher
 from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
-from wakefinder.common.allowlist import validate_token_allowlist
+from wakefinder.common.allowlist import validate_not_denylisted, validate_token_allowlist
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
@@ -101,8 +101,10 @@ async def run(
     reference_pools: dict[str, dict[str, str]],
     min_amount_in: int,
     token_allowlist: frozenset[str] = frozenset(),
+    token_denylist: frozenset[str] = frozenset(),
 ):
     validate_token_allowlist(_all_configured_tokens(reference_pools), token_allowlist)
+    validate_not_denylisted(_all_configured_tokens(reference_pools), token_denylist)
 
     settings = get_settings()
     if not (settings.solana_rpc_ws_url and settings.solana_rpc_http_url and settings.solana_private_key):

@@ -147,7 +147,11 @@ async def _stop_loss_loop(client, jupiter, sender, keypair, tip, positions, posi
                 await _exit_position(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, trade_log_file, token, "стоп-лосс")
 
 
-async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] = frozenset()):
+async def run(
+    watched_wallets: frozenset[str],
+    token_allowlist: frozenset[str] = frozenset(),
+    token_denylist: frozenset[str] = frozenset(),
+):
     settings = get_settings()
     if not (settings.solana_rpc_ws_url and settings.solana_rpc_http_url and settings.solana_private_key):
         raise RuntimeError("SOLANA_RPC_WS_URL / SOLANA_RPC_HTTP_URL / SOLANA_PRIVATE_KEY не настроены")
@@ -196,6 +200,8 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
                     return
 
             if token_allowlist and swap.token_out.lower() not in {t.lower() for t in token_allowlist}:
+                continue
+            if token_denylist and swap.token_out.lower() in {t.lower() for t in token_denylist}:
                 continue
 
             async with positions_lock:

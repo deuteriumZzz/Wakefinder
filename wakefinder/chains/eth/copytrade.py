@@ -228,7 +228,11 @@ async def _stop_loss_loop(w3, account, router_address, chain_id, positions, posi
                 await _exit_position(w3, account, router_address, chain_id, token, "стоп-лосс", positions, positions_lock, positions_file, trade_log_file)
 
 
-async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] = frozenset()):
+async def run(
+    watched_wallets: frozenset[str],
+    token_allowlist: frozenset[str] = frozenset(),
+    token_denylist: frozenset[str] = frozenset(),
+):
     settings = get_settings()
     account = Account.from_key(settings.eth_private_key.get_secret_value())
 
@@ -276,6 +280,8 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
                         return
 
                 if token_allowlist and swap.token_out.lower() not in {t.lower() for t in token_allowlist}:
+                    continue
+                if token_denylist and swap.token_out.lower() in {t.lower() for t in token_denylist}:
                     continue
 
                 async with positions_lock:
