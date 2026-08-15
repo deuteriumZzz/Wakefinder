@@ -1,8 +1,9 @@
-"""Append-only JSONL-лог попыток сделок. Не полноценный PnL-дашборд — тот
-потребовал бы снимков баланса до/после каждой сделки и защиты от гонок с
-остальной активностью кошелька, это отдельная, намного большая задача. Здесь —
-только сырые данные, достаточные, чтобы проанализировать реальные результаты
-позже (симулированная прибыль против того, что реально произошло по tx_refs)."""
+"""Append-only JSONL-лог попыток сделок. expected_profit — оценка на момент
+симуляции; realized_profit (опционален, см. common/reconciliation.py) —
+фактическая разница баланса token_in до/после, снятая ПОСТФАКТУМ после
+подтверждения включения. Не защищено от гонок с остальной активностью того
+же кошелька в промежутке (та же честная оговорка, что и раньше) — снимки
+баланса, не индивидуальный трейс переводов."""
 
 import json
 import time
@@ -17,6 +18,7 @@ def log_attempt(
     tx_refs: list[str],
     strategy: str = "arb",
     wallet: str = "",
+    realized_profit: int | None = None,
 ) -> None:
     record = {
         "ts": time.time(),
@@ -28,5 +30,7 @@ def log_attempt(
         "tx_refs": tx_refs,
         "wallet": wallet,  # watched-кошелёк, триггернувший сделку (для copytrade; пусто для arb)
     }
+    if realized_profit is not None:
+        record["realized_profit"] = realized_profit
     with open(path, "a") as f:
         f.write(json.dumps(record) + "\n")

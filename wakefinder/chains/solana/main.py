@@ -44,6 +44,7 @@ from wakefinder.common.allowlist import validate_not_denylisted, validate_token_
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
+from wakefinder.common.reconciliation import realized_profit_from_balances
 from wakefinder.common.reconnect import with_reconnect
 
 SLIPPAGE_BPS = 100  # допуск 1%, тот же принцип что и в ETH-версии
@@ -154,6 +155,9 @@ async def run(
         if not await _has_sufficient_balance(client, keypair.pubkey(), swap.token_in, sim.amount_in):
             continue
 
+        token_in_ata = get_associated_token_address(keypair.pubkey(), Pubkey.from_string(swap.token_in))
+        balance_before = int((await client.get_token_account_balance(token_in_ata)).value.amount)
+
         try:
             buy_unsigned = await jupiter.swap(
                 input_mint=swap.token_in,
@@ -191,7 +195,22 @@ async def run(
         logger.info("swap=%s profit_lamports=%d included=%s", swap.tx_hash, sim.expected_profit_wei, included)
 
         tip.record_outcome(included)
-        trade_log.log_attempt(settings.trade_log_file, "solana", swap.pool_address, sim.expected_profit_wei, included, [swap.tx_hash])
+
+        # Сверка с реальностью — тот же принцип, что и в ETH-версии (main.py):
+        # фактическая разница баланса token_in постфактум, не влияет на решение
+        # о следующей возможности.
+        realized_profit = None
+        if included:
+            try:
+                balance_after = int((await client.get_token_account_balance(token_in_ata)).value.amount)
+                realized_profit = realized_profit_from_balances(balance_before, balance_after)
+            except Exception as exc:
+                logger.warning("не удалось сверить реализованную прибыль (%s)", type(exc).__name__)
+
+        trade_log.log_attempt(
+            settings.trade_log_file, "solana", swap.pool_address, sim.expected_profit_wei, included, [swap.tx_hash],
+            realized_profit=realized_profit,
+        )
 
         consecutive_failures = 0 if included else consecutive_failures + 1
         if consecutive_failures >= settings.max_consecutive_failures:

@@ -51,6 +51,7 @@ from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.allowlist import validate_not_denylisted, validate_token_allowlist
+from wakefinder.common.reconciliation import realized_profit_from_balances
 from wakefinder.common.config import get_settings
 from wakefinder.common.interfaces import Bundle, PendingSwap, SimResult
 from wakefinder.common.reconnect import with_reconnect
@@ -213,6 +214,9 @@ async def run(
             if not await _has_sufficient_balance(w3, account.address, swap.token_in, sim.amount_in, gas_reserve_wei):
                 continue
 
+            token_in_contract = w3.eth.contract(address=swap.token_in, abi=ERC20_ABI)
+            balance_before = await token_in_contract.functions.balanceOf(account.address).call()
+
             block_number = await w3.eth.block_number
             nonce = await w3.eth.get_transaction_count(account.address, "pending")
 
@@ -226,7 +230,24 @@ async def run(
             logger.info("swap=%s profit_wei=%d included=%s", swap.tx_hash, sim.expected_profit_wei, included)
 
             tip.record_outcome(included)
-            trade_log.log_attempt(settings.trade_log_file, "eth", swap.pool_address, sim.expected_profit_wei, included, [swap.tx_hash])
+
+            # Сверка с реальностью: expected_profit_wei — оценка на момент симуляции,
+            # realized_profit — фактическая разница баланса token_in после того, как
+            # бандл действительно приземлился в target_block. Не блокирует и не
+            # задерживает решение о СЛЕДУЮЩЕЙ возможности — читается постфактум,
+            # только если бандл попал в блок.
+            realized_profit = None
+            if included:
+                try:
+                    balance_after = await token_in_contract.functions.balanceOf(account.address).call(block_identifier=block_number + 1)
+                    realized_profit = realized_profit_from_balances(balance_before, balance_after)
+                except Exception as exc:
+                    logger.warning("не удалось сверить реализованную прибыль (%s)", type(exc).__name__)
+
+            trade_log.log_attempt(
+                settings.trade_log_file, "eth", swap.pool_address, sim.expected_profit_wei, included, [swap.tx_hash],
+                realized_profit=realized_profit,
+            )
 
             consecutive_failures = 0 if included else consecutive_failures + 1
             if consecutive_failures >= settings.max_consecutive_failures:
