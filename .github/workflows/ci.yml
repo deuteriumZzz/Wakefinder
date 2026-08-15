@@ -13,8 +13,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: foundry-rs/foundry-toolchain@v1
       - run: pip install --upgrade pip setuptools
       - run: pip install -e ".[dev]"
+      # tests/test_fork_integration.py форкает публичный RPC (см. FORK_RPC_URL
+      # в файле) — если сеть недоступна из раннера, тесты сами skip'аются, не failed.
       - run: python -m pytest tests/ -q
       - run: python -m py_compile $(find wakefinder -name "*.py")
       - run: ruff check wakefinder tests

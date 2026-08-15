@@ -499,3 +499,17 @@ Solana сознательно не реализован тем же способ
 
 `pytest tests/ -q` — полный набор тестов. `ruff check wakefinder tests` — линт.
 `git log` — история реализации по фазам (Tier 0-4 архитектурного аудита).
+
+### Fork-тесты
+
+`tests/test_fork_integration.py` — прогоняет реальный `TwoPoolArbSimulator`
+против настоящего форкнутого состояния mainnet (через
+[anvil](https://book.getfoundry.sh/anvil/), не заглушки) — ловит расхождение
+между нашими ABI-фрагментами (`chains/eth/abi.py`) и реальным задеплоенным
+байткодом Uniswap V2/Sushiswap, чего моки в остальных тестах структурно не
+могут поймать.
+
+Установка (один раз): `curl -L https://foundry.paradigm.xyz | bash && foundryup`
+(на macOS может понадобиться `brew install libusb`). Без `anvil` в PATH эти
+конкретные тесты просто помечаются `skipped`, весь остальной `pytest tests/`
+не затронут. В CI ставится автоматически через `foundry-rs/foundry-toolchain`.
