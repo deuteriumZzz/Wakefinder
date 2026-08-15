@@ -1,0 +1,32 @@
+# Профиль: ETH backrun-арбитраж. Запуск: python -m wakefinder.cli run configs/eth-arb.toml
+# Все адреса ниже — ЗАГЛУШКИ, замените на реальные перед использованием
+# (см. README "Где брать данные" — адреса пар берутся с Etherscan/Dexscreener).
+
+chain = "eth"
+strategy = "arb"
+
+min_amount_in = 1000000000000000000  # 1 ETH в wei — порог размера свопа-триггера
+
+# Пулы, за которыми следим (кит двигает цену здесь) -> ключ на reference_pools ниже.
+[[pools]]
+token_in = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"   # WETH
+token_out = "0x0000000000000000000000000000000000000001" # ЗАГЛУШКА: адрес токена
+pool = "0x0000000000000000000000000000000000000002"      # ЗАГЛУШКА: адрес пула (Uniswap V2)
+
+# Референсный пул той же пары на ДРУГОМ DEX — без него нет второго источника
+# ликвидности и, соответственно, нет арбитража (см. docstring simulator.py).
+[[reference_pools]]
+target_pool = "0x0000000000000000000000000000000000000002"  # тот же адрес, что pool выше
+pool = "0x0000000000000000000000000000000000000003"         # ЗАГЛУШКА: референсный пул (Sushiswap и т.п.)
+router = "0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F"         # Sushiswap Router (mainnet)
+
+# Явный allowlist — рекомендуется для арбитража (пулы известны заранее).
+token_allowlist = [
+    "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "0x0000000000000000000000000000000000000001",
+]
+
+[risk]
+max_gas_gwei = 50
+max_capital_per_bundle_eth = 0.05
+min_reference_liquidity_eth = 1.0

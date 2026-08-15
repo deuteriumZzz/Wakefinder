@@ -16,6 +16,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.5"]
 
+[project.scripts]
+wakefinder = "wakefinder.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["wakefinder*"]
 

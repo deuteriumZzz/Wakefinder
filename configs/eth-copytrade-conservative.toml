@@ -1,0 +1,24 @@
+# Профиль: ETH копитрейдинг, консервативный режим (blue-chip токены, несколько
+# независимых кошельков должны сойтись прежде чем войти). Запуск:
+#   python -m wakefinder.cli run configs/eth-copytrade-conservative.toml
+
+chain = "eth"
+strategy = "copytrade"
+
+# Кошельки, за которыми следим — заполните реальными адресами (см. README
+# "Где брать данные о кошельках"). Заглушки ниже для примера формата.
+watched_wallets = [
+    "0x0000000000000000000000000000000000000010",
+    "0x0000000000000000000000000000000000000011",
+    "0x0000000000000000000000000000000000000012",
+]
+
+token_denylist = []  # известные fee-on-transfer/rebasing токены — курировать вручную
+
+[risk]
+copytrade_min_consensus_wallets = 3
+copytrade_consensus_window_seconds = 180
+copytrade_size_pct = 2
+copytrade_stop_loss_pct = 20
+copytrade_stop_loss_check_interval_seconds = 60
+copytrade_max_total_exposure_pct = 20

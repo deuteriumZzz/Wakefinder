@@ -1,0 +1,20 @@
+# Профиль: Solana копитрейдинг. Запуск:
+#   python -m wakefinder.cli run configs/solana-copytrade.toml
+# Адреса ниже — ЗАГЛУШКИ, замените на реальные watched-кошельки.
+
+chain = "solana"
+strategy = "copytrade"
+
+watched_wallets = [
+    "11111111111111111111111111111111111111111",
+]
+
+token_denylist = []
+
+[risk]
+copytrade_min_consensus_wallets = 2
+copytrade_consensus_window_seconds = 120
+copytrade_size_pct = 2
+copytrade_stop_loss_pct = 20
+copytrade_stop_loss_check_interval_seconds = 60
+copytrade_max_total_exposure_pct = 20

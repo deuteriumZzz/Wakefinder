@@ -1,0 +1,32 @@
+# Профиль: ETH копитрейдинг, "быстрый" режим под мемкоины — входим за ПЕРВЫМ
+# движением известного кошелька, не ждём подтверждения от второго (иначе к
+# моменту входа движение уже отыграно). Плата за скорость — меньший размер
+# на сделку и более рискованные допущения ниже (см. README "Мемкоин-профиль").
+#
+# ЭТО НЕ ОТДЕЛЬНАЯ СТРАТЕГИЯ — тот же chains/eth/copytrade.py, что и в
+# eth-copytrade-conservative.toml, только другие цифры риска и watched_wallets.
+#
+# Запуск: python -m wakefinder.cli run configs/eth-copytrade-fast-memecoin.toml
+
+chain = "eth"
+strategy = "copytrade"
+
+# Кошельки, которые ИМЕННО торгуют мемкоинами (не блю-чипы) — отдельный
+# список от консервативного профиля. См. README про то, где брать такие
+# адреса (wallet_scanner.py + Etherscan/Dexscreener/ручная курация).
+watched_wallets = [
+    "0x0000000000000000000000000000000000000020",
+]
+
+# Курировать ОБЯЗАТЕЛЬНО перед реальным запуском — у мемкоинов fee-on-transfer/
+# rebasing встречается намного чаще, чем у голубых фишек (см. README чек-лист).
+token_denylist = []
+
+[risk]
+copytrade_min_consensus_wallets = 1       # эффективно выключает ожидание консенсуса
+copytrade_consensus_window_seconds = 5    # не влияет при wallets=1, безопасный дефолт
+copytrade_size_pct = 0.5                  # меньше на сделку — компенсация риска скорости
+copytrade_stop_loss_pct = 15
+copytrade_stop_loss_check_interval_seconds = 5   # мемкоины волатильнее — 60с по умолчанию слишком редко
+copytrade_max_total_exposure_pct = 10
+min_reference_liquidity_eth = 0.1         # ниже дефолта (1.0) — осознанно снижает защиту от манипуляции
