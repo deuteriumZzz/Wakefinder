@@ -106,6 +106,35 @@ def test_simulator_buys_in_reference_sells_in_target():
     assert sim.sell_router == "0xTargetRouter"
 
 
+def test_simulator_rejects_thin_reference_pool():
+    token_in = "0xIN"
+    token_out = "0xOUT"
+    target_pool = "0xTARGET"
+    ref_pool = "0xREF"
+
+    scale = 10**18
+    target = FakeContract(target_pool, reserve0=1_000 * scale, reserve1=800 * scale, token0=token_in)
+    # референсный пул технически прибыльный (та же пропорция, что и в
+    # test_simulator_buys_in_reference_sells_in_target), но ниже
+    # MIN_REFERENCE_LIQUIDITY_ETH (дефолт 1.0 ETH) — дёшево манипулируемый.
+    ref = FakeContract(ref_pool, reserve0=int(0.5 * scale), reserve1=int(0.5 * scale), token0=token_in)
+
+    w3 = FakeW3(FakeEth(block_number=100, contracts={target_pool.lower(): target, ref_pool.lower(): ref}))
+
+    simulator = TwoPoolArbSimulator(
+        w3,
+        target_router="0xTargetRouter",
+        reference_pools={target_pool.lower(): {"pool": ref_pool, "router": "0xRefRouter"}},
+    )
+
+    swap = PendingSwap(tx_hash="0xabc", pool_address=target_pool, token_in=token_in, token_out=token_out, amount_in=10 * scale)
+
+    sim = asyncio.run(simulator.simulate(swap))
+
+    assert not sim.profitable
+    assert "тонкий" in sim.reason
+
+
 def test_simulator_no_opportunity_when_pools_already_balanced():
     token_in = "0xIN"
     pool_a = "0xA"
@@ -126,5 +155,6 @@ def test_simulator_no_opportunity_when_pools_already_balanced():
 
 if __name__ == "__main__":
     test_simulator_buys_in_reference_sells_in_target()
+    test_simulator_rejects_thin_reference_pool()
     test_simulator_no_opportunity_when_pools_already_balanced()
     print("ok")

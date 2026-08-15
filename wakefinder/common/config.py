@@ -108,6 +108,15 @@ class Settings(BaseSettings):
     drawdown_window_seconds: float = 86_400  # 24 часа
     drawdown_check_interval_seconds: float = 300  # throttle — полное сканирование trade_log на каждой проверке
 
+    # Минимальная ликвидность референсного пула (в единицах token_in — см.
+    # ponytail-заметку в simulator.py про допущение token_in≈WETH/wSOL) —
+    # тонкий референсный пул дёшево сдвинуть в том же блоке/слоте, что и
+    # атакуемый, подсунув боту фиктивно прибыльную котировку. Порог не
+    # ловит манипуляцию саму по себе, просто отказывается доверять пулам,
+    # которые для этого достаточно дёшевы.
+    min_reference_liquidity_eth: float = 1.0
+    min_reference_liquidity_sol: float = 10.0
+
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
         if self.eth_router_address.lower() not in KNOWN_ROUTERS:

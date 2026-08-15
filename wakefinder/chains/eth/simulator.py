@@ -66,6 +66,9 @@ class TwoPoolArbSimulator(Simulator):
 
         settings = get_settings()
 
+        if ref_reserve_in < settings.min_reference_liquidity_eth * 10**18:
+            return SimResult(profitable=False, expected_profit_wei=0, reason="референсный пул слишком тонкий — риск манипуляции ценой")
+
         # Кэп по капиталу применяем здесь (не постфактум в сборщике транзакций),
         # чтобы sim.amount_in/expected_profit_wei оставались согласованы со
         # сделкой, которую реально соберём и подпишем — кэп задним числом

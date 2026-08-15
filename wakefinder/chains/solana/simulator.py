@@ -52,6 +52,9 @@ class TwoPoolArbSimulator(Simulator):
 
         settings = get_settings()
 
+        if ref_reserve_in < settings.min_reference_liquidity_sol * 10**9:
+            return SimResult(profitable=False, expected_profit_wei=0, reason="референсный пул слишком тонкий — риск манипуляции ценой")
+
         # ponytail: тот же приём, что и в ETH-версии — предполагаем, что
         # token_in имеет 9 decimals (wrapped SOL), кэп задан в сырых lamports.
         lamports_cap = int(settings.max_capital_per_bundle_sol * 10**9)
