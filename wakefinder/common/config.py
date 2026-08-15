@@ -1,3 +1,6 @@
+import logging
+import os
+import stat
 from functools import lru_cache
 
 from eth_account import Account
@@ -6,6 +9,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from wakefinder.common.keystore import decrypt_from_file
 from wakefinder.common.killswitch import DEFAULT_PATH as DEFAULT_KILL_SWITCH_PATH
+
+logger = logging.getLogger("wakefinder.config")
 
 # Роутеры, на которые боту разрешено указывать. eth_router_address всё равно
 # настраивается через env (разным сетям/форкам нужны разные адреса), но
@@ -185,10 +190,32 @@ class Settings(BaseSettings):
         return self
 
 
+def _warn_if_permissive(path: str | None, label: str) -> None:
+    """Предупреждает, если файл с секретами читаем/писуем группой или всеми —
+    частая причина утечки на shared-серверах. Не блокирует старт (не всегда
+    фатально — например, в контейнере под конкретным пользователем), но
+    предупреждение должно быть заметным, не тихим. os.name != "posix"
+    пропускается — Windows ACL не сводится к этим битам."""
+    if not path or os.name != "posix" or not os.path.exists(path):
+        return
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    if mode & (stat.S_IRWXG | stat.S_IRWXO):
+        logger.warning(
+            "%s (%s) доступен на чтение/запись группе или всем (режим %o) — "
+            "выполните `chmod 600 %s`, файл содержит секреты",
+            label, path, mode, path,
+        )
+
+
 @lru_cache
 def get_settings() -> Settings:
     # Ленивая инициализация + кэш: создание Settings() на этапе импорта сделало
     # бы неимпортируемым (в том числе для тестов) любой модуль, касающийся
     # конфига, без реального .env — обязательные секреты должны падать при
     # первом использовании, а не при импорте.
-    return Settings()
+    settings = Settings()
+    _warn_if_permissive(".env", ".env")
+    _warn_if_permissive(settings.eth_private_key_file, "ETH_PRIVATE_KEY_FILE")
+    _warn_if_permissive(settings.flashbots_signer_key_file, "FLASHBOTS_SIGNER_KEY_FILE")
+    _warn_if_permissive(settings.solana_private_key_file, "SOLANA_PRIVATE_KEY_FILE")
+    return settings
