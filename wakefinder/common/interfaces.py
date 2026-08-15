@@ -12,6 +12,7 @@ class PendingSwap:
     token_in: str
     token_out: str
     amount_in: int
+    sender: str = ""  # отправитель, если известен (нужен для watchlist/консенсус-логики; Solana-вариант не всегда может его дать)
 
 
 @dataclass

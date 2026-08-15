@@ -40,6 +40,16 @@ ERC20_ABI = [
     },
 ]
 
+FACTORY_ABI = [
+    {
+        "name": "getPair",
+        "type": "function",
+        "inputs": [{"name": "tokenA", "type": "address"}, {"name": "tokenB", "type": "address"}],
+        "outputs": [{"name": "pair", "type": "address"}],
+        "stateMutability": "view",
+    },
+]
+
 PAIR_ABI = [
     {
         "name": "getReserves",

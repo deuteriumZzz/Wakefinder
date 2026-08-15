@@ -5,10 +5,13 @@
 которых берётся извне: вручную составленный watchlist или внешняя аналитика
 типа Nansen/Arkham; сам по себе блокчейн не размечает адреса по "умности").
 
-ponytail: адреса пулов передаёт вызывающий код (pool_registry), а не выводятся
-через CREATE2-salt фабрики — один lookup по словарю покрывает те пулы, которые
-реально важны; добавьте вывод через фабрику, если нужно следить за произвольными
-парами.
+ponytail: адреса пулов передаёт вызывающий код (pool_registry) — один lookup
+по словарю покрывает те пулы, которые реально важны для арбитража. Для
+watchlist-триггеров (копитрейдинг обязан следовать за китом в любой токен, не
+только заранее зарегистрированный) при промахе по pool_registry и заданном
+`factory_address` адрес пула выводится через `getPair()` фабрики Uniswap V2 и
+кэшируется — это НЕ включено для size-триггеров, чтобы не менять поведение
+уже работающего арбитражного пути.
 
 ponytail: `_seen` — неограниченное множество на весь срок жизни процесса —
 нормально для бота, который периодически перезапускают; добавьте LRU-вытеснение,
@@ -19,10 +22,11 @@ from collections.abc import AsyncIterator
 
 from web3 import AsyncWeb3
 
-from wakefinder.chains.eth.abi import ROUTER_ABI
+from wakefinder.chains.eth.abi import FACTORY_ABI, ROUTER_ABI
 from wakefinder.common.interfaces import MempoolWatcher, PendingSwap
 
 SWAP_FUNCTIONS = {"swapExactTokensForTokens", "swapExactETHForTokens"}
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
 class UniswapV2Watcher(MempoolWatcher):
@@ -33,18 +37,30 @@ class UniswapV2Watcher(MempoolWatcher):
         pool_registry: dict[tuple[str, str], str],
         min_amount_in: int,
         watched_wallets: frozenset[str] = frozenset(),
+        factory_address: str | None = None,
     ):
         self.w3 = w3
         self.router = w3.eth.contract(address=router_address, abi=ROUTER_ABI)
+        self.factory = w3.eth.contract(address=factory_address, abi=FACTORY_ABI) if factory_address else None
         self.pool_registry = pool_registry
         self.min_amount_in = min_amount_in
         self.watched_wallets = {a.lower() for a in watched_wallets}
         self._seen: set[str] = set()
+        self._factory_cache: dict[tuple[str, str], str | None] = {}
 
     def _pool_for(self, token_in: str, token_out: str) -> str | None:
         return self.pool_registry.get((token_in.lower(), token_out.lower())) or self.pool_registry.get(
             (token_out.lower(), token_in.lower())
         )
+
+    async def _pool_via_factory(self, token_in: str, token_out: str) -> str | None:
+        key = (token_in.lower(), token_out.lower())
+        if key in self._factory_cache:
+            return self._factory_cache[key]
+        pair = await self.factory.functions.getPair(token_in, token_out).call()
+        result = None if pair.lower() == ZERO_ADDRESS else pair
+        self._factory_cache[key] = result
+        return result
 
     async def watch(self) -> AsyncIterator[PendingSwap]:
         sub_id = await self.w3.eth.subscribe("newPendingTransactions")
@@ -86,6 +102,8 @@ class UniswapV2Watcher(MempoolWatcher):
                 continue
 
             pool = self._pool_for(path[0], path[-1])
+            if pool is None and is_watched_wallet and self.factory is not None:
+                pool = await self._pool_via_factory(path[0], path[-1])
             if pool is None:
                 continue
 
@@ -95,4 +113,5 @@ class UniswapV2Watcher(MempoolWatcher):
                 token_in=path[0],
                 token_out=path[-1],
                 amount_in=amount_in,
+                sender=sender,
             )

@@ -64,6 +64,26 @@ class Settings(BaseSettings):
     # анализа) — не полноценный PnL-дашборд, а сырые данные для него.
     trade_log_file: str = "trades.jsonl"
 
+    # Factory нужна только копитрейдингу — арбитраж работает по заранее
+    # заданному pool_registry, а копитрейдинг обязан следовать за watchlist-
+    # кошельком в токены, которые никто заранее не регистрировал.
+    eth_factory_address: str = "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f"  # Uniswap V2 Factory
+
+    # Копитрейдинг: доля ТЕКУЩЕГО баланса нашего кошелька (не сумма кита!) на
+    # каждый вход — киты бывают с бюджетом в миллионы, мы физически не можем
+    # и не должны повторять их абсолютный размер сделки, только направление.
+    copytrade_size_pct: float = Field(default=2.0, gt=0, le=100)
+    copytrade_stop_loss_pct: float = Field(default=20.0, gt=0, le=100)
+    copytrade_stop_loss_check_interval_seconds: int = 60
+    copytrade_positions_file: str = "positions.json"
+    solana_copytrade_positions_file: str = "positions_solana.json"
+
+    # Консенсус: вход только если >= N разных watched-кошельков купили один и
+    # тот же токен в течение окна — один кит может ошибаться, несколько
+    # независимых китов, сходящихся почти одновременно, сильнее как сигнал.
+    copytrade_min_consensus_wallets: int = Field(default=2, ge=1)
+    copytrade_consensus_window_seconds: float = 120
+
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
         if self.eth_router_address.lower() not in KNOWN_ROUTERS:
