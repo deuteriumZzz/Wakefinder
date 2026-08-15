@@ -172,6 +172,7 @@ async def run(
         sender = FlashbotsBundleSender(
             rpc_url=settings.eth_rpc_http_url.get_secret_value(),
             signer_account=fb_signer,
+            relay_urls=[u.strip() for u in settings.eth_relay_urls.split(",") if u.strip()],
         )
 
         async for swap in with_reconnect(watcher.watch):

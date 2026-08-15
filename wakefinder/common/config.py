@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     eth_rpc_http_url: SecretStr
     eth_router_address: str = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"  # Uniswap V2 Router02
     eth_weth_address: str = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+    # Список MEV-relay через запятую — один и тот же бандл уходит параллельно
+    # во все (см. docstring chains/eth/sender.py). Дефолт — только Flashbots.
+    eth_relay_urls: str = "https://relay.flashbots.net"
     # Ровно один источник на ключ: plaintext ИЛИ зашифрованный файл (см.
     # common/keystore.py) — не оба и не ни одного. *_KEY_FILE + пассфраза в
     # WALLET_KEY_PASSPHRASE — альтернатива голому ключу в .env; шифрует
