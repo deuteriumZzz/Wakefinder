@@ -115,6 +115,22 @@ async def _reserves(w3: AsyncWeb3, pool_address: str, token_in: str) -> tuple[in
     return r1, r0
 
 
+async def _unrealized_pnl(w3: AsyncWeb3, positions: dict[str, "Position"]) -> int:
+    """Текущая переоценка всех открытых позиций минус то, что за них
+    заплачено — для drawdown-проверки (см. common/drawdown.py). Позицию,
+    которую не удалось оценить (RPC-сбой), пропускаем, а не считаем нулевой
+    прибылью/убытком — недооценка просадки безопаснее переоценки."""
+    total = 0
+    for pos in positions.values():
+        try:
+            reserve_in, reserve_out = await _reserves(w3, pos.pool_address, pos.token)
+            current_value = get_amount_out(pos.amount_held, reserve_in, reserve_out)
+        except Exception:
+            continue
+        total += current_value - pos.entry_amount_in
+    return total
+
+
 async def _wait_for_receipt(w3: AsyncWeb3, tx_hash, timeout_seconds: float = RECEIPT_TIMEOUT_SECONDS) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
@@ -269,12 +285,22 @@ async def run(
                 now = time.time()
                 if now - last_drawdown_check >= settings.drawdown_check_interval_seconds:
                     last_drawdown_check = now
-                    status = check_drawdown(settings.trade_log_file, "eth", settings.drawdown_window_seconds, int(settings.max_drawdown_eth * 10**18))
+                    async with positions_lock:
+                        positions_snapshot = dict(positions)
+                    unrealized = await _unrealized_pnl(w3, positions_snapshot)
+                    status = check_drawdown(
+                        settings.trade_log_file, "eth", settings.drawdown_window_seconds,
+                        int(settings.max_drawdown_eth * 10**18), unrealized_pnl=unrealized,
+                    )
                     if status.breached:
-                        logger.critical("просадка за окно %d wei превысила лимит — включаю kill switch", status.realized_pnl)
+                        logger.critical(
+                            "просадка за окно realized=%d unrealized=%d wei превысила лимит — включаю kill switch",
+                            status.realized_pnl, status.unrealized_pnl,
+                        )
                         send_telegram_alert(
                             settings.telegram_bot_token, settings.telegram_chat_id,
-                            f"[wakefinder/eth copytrade] просадка {status.realized_pnl} wei превысила лимит — kill switch",
+                            f"[wakefinder/eth copytrade] просадка realized={status.realized_pnl} "
+                            f"unrealized={status.unrealized_pnl} wei превысила лимит — kill switch",
                         )
                         killswitch.engage(settings.kill_switch_file, "drawdown breach: eth copytrade")
                         return

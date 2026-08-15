@@ -4,10 +4,12 @@
 блок" (сломанный пайплайн), этот — от "стратегия работает как задумано, но
 теряет деньги" (плохая неделя у китов, слиппедж съедает маржу арбитража).
 
-ponytail: считает только РЕАЛИЗОВАННЫЙ PnL из trade_log.jsonl, не
-незафиксированную стоимость открытых копитрейд-позиций — переоценка живых
-позиций задублировала бы логику, уже существующую в стоп-лосс циклах каждой
-сети. Апгрейд — общий колбэк переоценки, если понадобится учитывать unrealized.
+check_drawdown принимает необязательный unrealized_pnl (в тех же нативных
+единицах, что и realized) — вызывающая сторона (copytrade-энтрипоинты)
+переоценивает свои открытые позиции живым RPC/quote-запросом и передаёт
+число сюда; сам drawdown.py остаётся синхронным и не делает сетевых вызовов.
+Дублирования со стоп-лосс циклом нет: тот закрывает ОДНУ позицию по цене,
+этот — читает уже посчитанную агрегированную переоценку всех позиций сразу.
 
 ponytail: полное сканирование файла на каждой проверке — O(n) от размера
 trade_log.jsonl, растущего без ограничения. Нормально для текущего масштаба;
@@ -26,6 +28,7 @@ from dataclasses import dataclass
 @dataclass
 class DrawdownStatus:
     realized_pnl: int
+    unrealized_pnl: int
     breached: bool
 
 
@@ -63,7 +66,9 @@ def compute_realized_pnl(trade_log_path: str, chain: str, window_seconds: float,
 
 
 def check_drawdown(
-    trade_log_path: str, chain: str, window_seconds: float, max_loss: int, now: float | None = None
+    trade_log_path: str, chain: str, window_seconds: float, max_loss: int, now: float | None = None,
+    unrealized_pnl: int = 0,
 ) -> DrawdownStatus:
-    pnl = compute_realized_pnl(trade_log_path, chain, window_seconds, now=now)
-    return DrawdownStatus(realized_pnl=pnl, breached=pnl < -max_loss)
+    realized = compute_realized_pnl(trade_log_path, chain, window_seconds, now=now)
+    total = realized + unrealized_pnl
+    return DrawdownStatus(realized_pnl=realized, unrealized_pnl=unrealized_pnl, breached=total < -max_loss)

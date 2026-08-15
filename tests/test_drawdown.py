@@ -68,5 +68,28 @@ def test_check_drawdown_no_breach(tmp_path):
     assert status.breached is False
 
 
+def test_unrealized_pnl_pushes_into_breach(tmp_path):
+    path = tmp_path / "trades.jsonl"
+    _write_log(path, [
+        {"chain": "eth", "strategy": "arb", "included": True, "expected_profit": 100, "ts": 1000},
+    ])
+    # реализованный PnL сам по себе не пробивает лимит, но открытая позиция
+    # сейчас глубоко в минусе — суммарная просадка должна это учитывать.
+    status = check_drawdown(str(path), "eth", window_seconds=3600, max_loss=500, now=1002, unrealized_pnl=-700)
+    assert status.realized_pnl == 100
+    assert status.unrealized_pnl == -700
+    assert status.breached is True
+
+
+def test_unrealized_pnl_defaults_to_zero(tmp_path):
+    path = tmp_path / "trades.jsonl"
+    _write_log(path, [
+        {"chain": "eth", "strategy": "arb", "included": True, "expected_profit": 100, "ts": 1000},
+    ])
+    status = check_drawdown(str(path), "eth", window_seconds=3600, max_loss=500, now=1002)
+    assert status.unrealized_pnl == 0
+    assert status.breached is False
+
+
 if __name__ == "__main__":
     print("run via pytest (uses tmp_path fixture)")

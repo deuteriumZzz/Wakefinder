@@ -127,6 +127,25 @@ async def _exit_position(client, jupiter, sender, keypair, tip, positions, posit
         send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, f"[wakefinder/solana copytrade] стоп-лосс: токен={token} included={included}")
 
 
+async def _unrealized_pnl(jupiter, positions: dict[str, Position]) -> int:
+    """Текущая переоценка всех открытых позиций минус то, что за них
+    заплачено — для drawdown-проверки (см. common/drawdown.py). Позицию,
+    которую не удалось оценить (quote-сбой), пропускаем, а не считаем
+    нулевой прибылью/убытком — недооценка просадки безопаснее переоценки."""
+    total = 0
+    for pos in positions.values():
+        try:
+            quote = await jupiter.quote(
+                input_mint=pos.token, output_mint=pos.token_in, amount=pos.amount_held,
+                slippage_bps=SLIPPAGE_BPS, only_direct_routes=True,
+            )
+            current_value = int(quote["outAmount"])
+        except Exception:
+            continue
+        total += current_value - pos.entry_amount_in
+    return total
+
+
 async def _stop_loss_loop(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, trade_log_file, stop_loss_pct, interval_seconds):
     while True:
         await asyncio.sleep(interval_seconds)
@@ -189,12 +208,22 @@ async def run(
             now = time.time()
             if now - last_drawdown_check >= settings.drawdown_check_interval_seconds:
                 last_drawdown_check = now
-                status = check_drawdown(settings.trade_log_file, "solana", settings.drawdown_window_seconds, int(settings.max_drawdown_sol * 10**9))
+                async with positions_lock:
+                    positions_snapshot = dict(positions)
+                unrealized = await _unrealized_pnl(jupiter, positions_snapshot)
+                status = check_drawdown(
+                    settings.trade_log_file, "solana", settings.drawdown_window_seconds,
+                    int(settings.max_drawdown_sol * 10**9), unrealized_pnl=unrealized,
+                )
                 if status.breached:
-                    logger.critical("просадка за окно %d lamports превысила лимит — включаю kill switch", status.realized_pnl)
+                    logger.critical(
+                        "просадка за окно realized=%d unrealized=%d lamports превысила лимит — включаю kill switch",
+                        status.realized_pnl, status.unrealized_pnl,
+                    )
                     send_telegram_alert(
                         settings.telegram_bot_token, settings.telegram_chat_id,
-                        f"[wakefinder/solana copytrade] просадка {status.realized_pnl} lamports превысила лимит — kill switch",
+                        f"[wakefinder/solana copytrade] просадка realized={status.realized_pnl} "
+                        f"unrealized={status.unrealized_pnl} lamports превысила лимит — kill switch",
                     )
                     killswitch.engage(settings.kill_switch_file, "drawdown breach: solana copytrade")
                     return
