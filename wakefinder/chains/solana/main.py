@@ -21,6 +21,7 @@ watcher. Бандл = [buy_leg, sell_leg, tip] — три подписанные
 import asyncio
 import base64
 import logging
+import os
 import time
 
 from jupiter_python_sdk.jupiter import Jupiter
@@ -36,13 +37,14 @@ from spl.token.instructions import get_associated_token_address
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.simulator import TwoPoolArbSimulator
 from wakefinder.chains.solana.watcher import RaydiumVaultWatcher
-from wakefinder.common import killswitch, trade_log
+from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.allowlist import validate_token_allowlist
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle, PendingSwap, SimResult
+from wakefinder.common.reconnect import with_reconnect
 
 SLIPPAGE_BPS = 100  # допуск 1%, тот же принцип что и в ETH-версии
 FEE_RESERVE_LAMPORTS = 50_000  # запас на fee + tip + rent, консервативная оценка
@@ -119,11 +121,14 @@ async def run(
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
     consecutive_failures = 0
     last_drawdown_check = 0.0
+    heartbeat_path = os.path.join(settings.heartbeat_dir, "solana_arb.heartbeat")
+    heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
-    async for swap in watcher.watch():
+    async for swap in with_reconnect(watcher.watch):
         if killswitch.is_engaged(settings.kill_switch_file):
             logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
             send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/solana arb] kill switch присутствует — бот остановлен")
+            heartbeat_task.cancel()
             return
 
         now = time.time()
@@ -137,6 +142,7 @@ async def run(
                     f"[wakefinder/solana arb] просадка {status.realized_pnl} lamports превысила лимит — kill switch",
                 )
                 killswitch.engage(settings.kill_switch_file, "drawdown breach: solana arb")
+                heartbeat_task.cancel()
                 return
 
         sim = await simulator.simulate(swap)
@@ -196,6 +202,7 @@ async def run(
                 f"[wakefinder/solana arb] {consecutive_failures} бандлов подряд не попали в блок — авто-kill switch",
             )
             killswitch.engage(settings.kill_switch_file, "consecutive failures: solana arb")
+            heartbeat_task.cancel()
             return
 
 

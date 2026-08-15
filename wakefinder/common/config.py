@@ -117,6 +117,14 @@ class Settings(BaseSettings):
     min_reference_liquidity_eth: float = 1.0
     min_reference_liquidity_sol: float = 10.0
 
+    # Heartbeat: каждый из 4 процессов пишет свой файл в этой директории на
+    # интервале ниже — внешний мониторинг (cron/systemd) проверяет свежесть
+    # через `python -m wakefinder.common.heartbeat <path> <max_age_seconds>`.
+    # Ловит тихое зависание event loop, которое не даёт исключения (поэтому
+    # его не ловит ни kill switch, ни with_reconnect).
+    heartbeat_dir: str = "."
+    heartbeat_interval_seconds: float = 30
+
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
         if self.eth_router_address.lower() not in KNOWN_ROUTERS:

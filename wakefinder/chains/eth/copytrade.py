@@ -48,12 +48,13 @@ from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
 from wakefinder.chains.eth.abi import PAIR_ABI, ROUTER_ABI
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
-from wakefinder.common import killswitch, trade_log
+from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.amm import get_amount_out
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
 from wakefinder.common.drawdown import check_drawdown
+from wakefinder.common.reconnect import with_reconnect
 
 SLIPPAGE_BPS = 100
 GAS_LIMIT = 200_000
@@ -251,9 +252,11 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
                 settings.copytrade_stop_loss_check_interval_seconds,
             )
         )
+        heartbeat_path = os.path.join(settings.heartbeat_dir, "eth_copytrade.heartbeat")
+        heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
         try:
-            async for swap in watcher.watch():
+            async for swap in with_reconnect(watcher.watch):
                 if killswitch.is_engaged(settings.kill_switch_file):
                     logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
                     send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/eth copytrade] kill switch присутствует — бот остановлен")
@@ -300,6 +303,7 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
                 )
         finally:
             stop_loss_task.cancel()
+            heartbeat_task.cancel()
 
 
 if __name__ == "__main__":

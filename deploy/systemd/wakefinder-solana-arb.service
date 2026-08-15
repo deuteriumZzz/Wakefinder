@@ -1,0 +1,18 @@
+[Unit]
+Description=Wakefinder — Solana backrun-арбитраж
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wakefinder
+EnvironmentFile=/opt/wakefinder/.env
+# как и в wakefinder-eth-arb.service — замените ExecStart на свою обёртку с
+# реальными pools/reference_pools, если не используете голый модуль.
+ExecStart=/opt/wakefinder/.venv/bin/python -m wakefinder.chains.solana.main
+Restart=always
+RestartSec=5
+User=wakefinder
+
+[Install]
+WantedBy=multi-user.target

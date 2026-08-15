@@ -31,13 +31,14 @@ from spl.token.instructions import get_associated_token_address
 from wakefinder.chains.solana.main import _build_tip_tx, _sign_unsigned_tx, _tip_lamports
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.wallet_watcher import WalletSwapWatcher
-from wakefinder.common import killswitch, trade_log
+from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
+from wakefinder.common.reconnect import with_reconnect
 
 SLIPPAGE_BPS = 100
 
@@ -171,9 +172,11 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
             settings.copytrade_stop_loss_check_interval_seconds,
         )
     )
+    heartbeat_path = os.path.join(settings.heartbeat_dir, "solana_copytrade.heartbeat")
+    heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
     try:
-        async for swap in watcher.watch():
+        async for swap in with_reconnect(watcher.watch):
             if killswitch.is_engaged(settings.kill_switch_file):
                 logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
                 send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/solana copytrade] kill switch присутствует — бот остановлен")
@@ -251,6 +254,7 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
                 _save_positions(settings.solana_copytrade_positions_file, positions)
     finally:
         stop_loss_task.cancel()
+        heartbeat_task.cancel()
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ nonce и войти в гонку — чинить это нужно через 
 
 import asyncio
 import logging
+import os
 import time
 
 from eth_account import Account
@@ -45,13 +46,14 @@ from wakefinder.chains.eth.abi import ERC20_ABI, ROUTER_ABI
 from wakefinder.chains.eth.sender import FlashbotsBundleSender
 from wakefinder.chains.eth.simulator import GAS_LIMIT, TwoPoolArbSimulator
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
-from wakefinder.common import killswitch, trade_log
+from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.allowlist import validate_token_allowlist
 from wakefinder.common.config import get_settings
 from wakefinder.common.interfaces import Bundle, PendingSwap, SimResult
+from wakefinder.common.reconnect import with_reconnect
 
 SLIPPAGE_BPS = 100  # допуск 1% между симуляцией и исполнением в сети
 BASE_PRIORITY_FEE_WEI = Web3.to_wei(2, "gwei")  # минимальный tip даже если доля от прибыли округляется почти до 0
@@ -156,6 +158,8 @@ async def run(
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
     consecutive_failures = 0
     last_drawdown_check = 0.0
+    heartbeat_path = os.path.join(settings.heartbeat_dir, "eth_arb.heartbeat")
+    heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
     provider = WebsocketProviderV2(settings.eth_rpc_ws_url.get_secret_value())
     async with AsyncWeb3.persistent_websocket(provider) as w3:
@@ -167,10 +171,11 @@ async def run(
             signer_account=fb_signer,
         )
 
-        async for swap in watcher.watch():
+        async for swap in with_reconnect(watcher.watch):
             if killswitch.is_engaged(settings.kill_switch_file):
                 logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
                 send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/eth arb] kill switch присутствует — бот остановлен")
+                heartbeat_task.cancel()
                 return
 
             now = time.time()
@@ -184,6 +189,7 @@ async def run(
                         f"[wakefinder/eth arb] просадка {status.realized_pnl} wei превысила лимит — kill switch",
                     )
                     killswitch.engage(settings.kill_switch_file, "drawdown breach: eth arb")
+                    heartbeat_task.cancel()
                     return
 
             sim = await simulator.simulate(swap)
@@ -231,6 +237,7 @@ async def run(
                     f"[wakefinder/eth arb] {consecutive_failures} бандлов подряд не попали в блок — авто-kill switch",
                 )
                 killswitch.engage(settings.kill_switch_file, "consecutive failures: eth arb")
+                heartbeat_task.cancel()
                 return
 
 

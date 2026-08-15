@@ -1,0 +1,20 @@
+[Unit]
+Description=Wakefinder — ETH backrun-арбитраж
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wakefinder
+EnvironmentFile=/opt/wakefinder/.env
+# python -m wakefinder.chains.eth.main запускает run() с пустыми
+# pool_registry/reference_pools (см. wakefinder/chains/eth/main.py) — это
+# заглушка для smoke-теста, не рабочая конфигурация. Замените ExecStart на
+# свой скрипт-обёртку, который вызывает run(...) с реальными пулами/watchlist.
+ExecStart=/opt/wakefinder/.venv/bin/python -m wakefinder.chains.eth.main
+Restart=always
+RestartSec=5
+User=wakefinder
+
+[Install]
+WantedBy=multi-user.target
