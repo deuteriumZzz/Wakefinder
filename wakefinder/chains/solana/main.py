@@ -43,7 +43,7 @@ from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.allowlist import validate_token_allowlist
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
-from wakefinder.common.interfaces import Bundle, PendingSwap, SimResult
+from wakefinder.common.interfaces import Bundle
 from wakefinder.common.reconnect import with_reconnect
 
 SLIPPAGE_BPS = 100  # допуск 1%, тот же принцип что и в ETH-версии

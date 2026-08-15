@@ -32,7 +32,7 @@ def _print_wallet_stats(trade_log_path: str) -> None:
     if not stats:
         print(f"Статистика по кошелькам: нет данных в {trade_log_path}")
         return
-    print(f"Статистика по кошелькам (приблизительно, см. docstring wallet_stats.py):")
+    print("Статистика по кошелькам (приблизительно, см. docstring wallet_stats.py):")
     for s in sorted(stats.values(), key=lambda s: s.net_pnl_estimate, reverse=True):
         print(f"  {s.wallet[:12]}...  entries={s.entries}  exits={s.exits}  net_pnl~={s.net_pnl_estimate}  win_rate={s.win_rate:.0%}")
 
