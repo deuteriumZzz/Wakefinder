@@ -31,18 +31,21 @@ class TwoPoolArbSimulator(Simulator):
         self.weth_address = weth_address
         self._token0_cache: dict[str, str] = {}
 
-    async def _eth_wei_to_token_in(self, token_in: str, eth_wei: int) -> int | None:
+    async def _eth_wei_to_token_in(self, token_in: str, eth_wei: int, block_number: int) -> int | None:
         """Конвертирует сумму в ETH wei (газ, кэп по капиталу) в эквивалент
-        в единицах token_in через getAmountsOut на целевом роутере. Когда
-        token_in уже WETH — просто возвращает как есть, без RPC-вызова (сохраняет
-        текущее поведение/задержку для доминирующего случая). None означает
-        "не удалось оценить" (нет прямой пары WETH/token_in на роутере) —
-        вызывающий код должен трактовать это как "не торгуем", не как ноль."""
+        в единицах token_in через getAmountsOut на целевом роутере, на том же
+        block_number, что и остальная симуляция (важно для бэктеста — иначе
+        конвертация тихо использовала бы текущий live-курс для исторического
+        свопа). Когда token_in уже WETH — просто возвращает как есть, без
+        RPC-вызова (сохраняет текущее поведение/задержку для доминирующего
+        случая). None означает "не удалось оценить" (нет прямой пары
+        WETH/token_in на роутере) — вызывающий код должен трактовать это как
+        "не торгуем", не как ноль."""
         if token_in.lower() == self.weth_address.lower():
             return eth_wei
         router = self.w3.eth.contract(address=self.target_router, abi=ROUTER_ABI)
         try:
-            amounts = await router.functions.getAmountsOut(eth_wei, [self.weth_address, token_in]).call()
+            amounts = await router.functions.getAmountsOut(eth_wei, [self.weth_address, token_in]).call(block_identifier=block_number)
             return amounts[-1]
         except Exception:
             return None
@@ -64,7 +67,11 @@ class TwoPoolArbSimulator(Simulator):
             return reserve0, reserve1
         return reserve1, reserve0
 
-    async def simulate(self, swap: PendingSwap) -> SimResult:
+    async def simulate(self, swap: PendingSwap, block_number: int | None = None) -> SimResult:
+        """block_number=None (по умолчанию, прод) -> текущий блок сети — своп
+        ещё pending, значит "текущее" состояние и есть состояние ДО его
+        включения. Явный block_number — для бэктеста (wakefinder/backtest.py):
+        состояние на block_number-1 относительно исторического блока свопа."""
         ref = self.reference_pools.get(swap.pool_address.lower())
         if ref is None:
             return SimResult(profitable=False, expected_profit_wei=0, reason="референсный пул не настроен")
@@ -74,7 +81,8 @@ class TwoPoolArbSimulator(Simulator):
         # apply_swap(), чтобы смоделировать состояние после включения;
         # референсный пул нужно прочитать в тот же момент, чтобы не сравнивать
         # цены из разных блоков.
-        block_number = await self.w3.eth.block_number
+        if block_number is None:
+            block_number = await self.w3.eth.block_number
 
         target_reserve_in, target_reserve_out = await self._reserves(swap.pool_address, swap.token_in, block_number)
         new_target_in, new_target_out, _ = apply_swap(target_reserve_in, target_reserve_out, swap.amount_in)
@@ -95,8 +103,8 @@ class TwoPoolArbSimulator(Simulator):
         capital_cap_eth_wei = int(settings.max_capital_per_bundle_eth * 10**18)
         gas_cost_eth_wei = 2 * GAS_LIMIT * int(settings.max_gas_gwei * 10**9)
 
-        capital_cap_in_token_in = await self._eth_wei_to_token_in(swap.token_in, capital_cap_eth_wei)
-        gas_cost_in_token_in = await self._eth_wei_to_token_in(swap.token_in, gas_cost_eth_wei)
+        capital_cap_in_token_in = await self._eth_wei_to_token_in(swap.token_in, capital_cap_eth_wei, block_number)
+        gas_cost_in_token_in = await self._eth_wei_to_token_in(swap.token_in, gas_cost_eth_wei, block_number)
         if capital_cap_in_token_in is None or gas_cost_in_token_in is None:
             return SimResult(
                 profitable=False, expected_profit_wei=0,

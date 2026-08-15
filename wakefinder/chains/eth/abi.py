@@ -79,4 +79,24 @@ PAIR_ABI = [
         "outputs": [{"name": "", "type": "address"}],
         "stateMutability": "view",
     },
+    {
+        "name": "token1",
+        "type": "function",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+    },
+    {
+        "name": "Swap",
+        "type": "event",
+        "anonymous": False,
+        "inputs": [
+            {"name": "sender", "type": "address", "indexed": True},
+            {"name": "amount0In", "type": "uint256", "indexed": False},
+            {"name": "amount1In", "type": "uint256", "indexed": False},
+            {"name": "amount0Out", "type": "uint256", "indexed": False},
+            {"name": "amount1Out", "type": "uint256", "indexed": False},
+            {"name": "to", "type": "address", "indexed": True},
+        ],
+    },
 ]
