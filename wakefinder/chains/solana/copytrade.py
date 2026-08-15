@@ -31,11 +31,12 @@ from spl.token.instructions import get_associated_token_address
 from wakefinder.chains.solana.main import _build_tip_tx, _sign_unsigned_tx, _tip_lamports
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.wallet_watcher import WalletSwapWatcher
-from wakefinder.common import trade_log
+from wakefinder.common import killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
+from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
 
 SLIPPAGE_BPS = 100
@@ -159,6 +160,7 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
     positions = _load_positions(settings.solana_copytrade_positions_file)
     positions_lock = asyncio.Lock()
     consensus = ConsensusTracker(settings.copytrade_min_consensus_wallets, settings.copytrade_consensus_window_seconds)
+    last_drawdown_check = 0.0
 
     watcher = WalletSwapWatcher(settings.solana_rpc_ws_url.get_secret_value(), client, watched_wallets)
 
@@ -172,10 +174,23 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
 
     try:
         async for swap in watcher.watch():
-            if os.path.exists(settings.kill_switch_file):
-                logger.warning("файл kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
+            if killswitch.is_engaged(settings.kill_switch_file):
+                logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
                 send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/solana copytrade] kill switch присутствует — бот остановлен")
                 return
+
+            now = time.time()
+            if now - last_drawdown_check >= settings.drawdown_check_interval_seconds:
+                last_drawdown_check = now
+                status = check_drawdown(settings.trade_log_file, "solana", settings.drawdown_window_seconds, int(settings.max_drawdown_sol * 10**9))
+                if status.breached:
+                    logger.critical("просадка за окно %d lamports превысила лимит — включаю kill switch", status.realized_pnl)
+                    send_telegram_alert(
+                        settings.telegram_bot_token, settings.telegram_chat_id,
+                        f"[wakefinder/solana copytrade] просадка {status.realized_pnl} lamports превысила лимит — kill switch",
+                    )
+                    killswitch.engage(settings.kill_switch_file, "drawdown breach: solana copytrade")
+                    return
 
             if token_allowlist and swap.token_out.lower() not in {t.lower() for t in token_allowlist}:
                 continue

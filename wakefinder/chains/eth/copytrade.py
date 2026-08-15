@@ -48,11 +48,12 @@ from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
 from wakefinder.chains.eth.abi import PAIR_ABI, ROUTER_ABI
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
-from wakefinder.common import trade_log
+from wakefinder.common import killswitch, trade_log
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.amm import get_amount_out
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
+from wakefinder.common.drawdown import check_drawdown
 
 SLIPPAGE_BPS = 100
 GAS_LIMIT = 200_000
@@ -233,6 +234,7 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
     positions = _load_positions(settings.copytrade_positions_file)
     positions_lock = asyncio.Lock()
     consensus = ConsensusTracker(settings.copytrade_min_consensus_wallets, settings.copytrade_consensus_window_seconds)
+    last_drawdown_check = 0.0
 
     provider = WebsocketProviderV2(settings.eth_rpc_ws_url.get_secret_value())
     async with AsyncWeb3.persistent_websocket(provider) as w3:
@@ -252,10 +254,23 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
 
         try:
             async for swap in watcher.watch():
-                if os.path.exists(settings.kill_switch_file):
-                    logger.warning("файл kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
+                if killswitch.is_engaged(settings.kill_switch_file):
+                    logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
                     send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/eth copytrade] kill switch присутствует — бот остановлен")
                     return
+
+                now = time.time()
+                if now - last_drawdown_check >= settings.drawdown_check_interval_seconds:
+                    last_drawdown_check = now
+                    status = check_drawdown(settings.trade_log_file, "eth", settings.drawdown_window_seconds, int(settings.max_drawdown_eth * 10**18))
+                    if status.breached:
+                        logger.critical("просадка за окно %d wei превысила лимит — включаю kill switch", status.realized_pnl)
+                        send_telegram_alert(
+                            settings.telegram_bot_token, settings.telegram_chat_id,
+                            f"[wakefinder/eth copytrade] просадка {status.realized_pnl} wei превысила лимит — kill switch",
+                        )
+                        killswitch.engage(settings.kill_switch_file, "drawdown breach: eth copytrade")
+                        return
 
                 if token_allowlist and swap.token_out.lower() not in {t.lower() for t in token_allowlist}:
                     continue

@@ -4,6 +4,8 @@ from eth_account import Account
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from wakefinder.common.killswitch import DEFAULT_PATH as DEFAULT_KILL_SWITCH_PATH
+
 # Роутеры, на которые боту разрешено указывать. eth_router_address всё равно
 # настраивается через env (разным сетям/форкам нужны разные адреса), но
 # произвольное переопределение через env — например, опечатка или скомпрометированный
@@ -34,9 +36,11 @@ class Settings(BaseSettings):
     max_capital_per_bundle_eth: float = 0.05
 
     # Файл-сигнал: если он существует, бот останавливается перед следующим
-    # действием. `touch` — чтобы остановить без передеплоя; удалить — чтобы
-    # продолжить.
-    kill_switch_file: str = ".kill"
+    # действием. Единый на все 4 процесса (ETH/Solana × arb/copytrade) —
+    # дефолт АБСОЛЮТНЫЙ (см. killswitch.py), чтобы не зависеть от рабочей
+    # директории каждого процесса. `python -m wakefinder.common.killswitch
+    # stop|resume|status` — операционный CLI, не "не забудьте touch .kill".
+    kill_switch_file: str = DEFAULT_KILL_SWITCH_PATH
 
     # Доля чистой прибыли, которую ставим сверху как priority fee (ETH) или
     # Jito-tip (Solana), чтобы конкурировать за включение — билдеры сортируют
@@ -93,6 +97,16 @@ class Settings(BaseSettings):
     # неудач). Пустые значения = алерты выключены, не обязательны.
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+
+    # Портфельный circuit breaker по РЕАЛИЗОВАННОЙ просадке за скользящее
+    # окно, агрегированной по всем стратегиям одной сети (arb + copytrade
+    # вместе) — независим от MAX_CONSECUTIVE_FAILURES, который ловит только
+    # "бандл не попадает в блок", не "стратегия работает и теряет деньги".
+    # В нативных единицах сети (нет USD price feed).
+    max_drawdown_eth: float = 0.5
+    max_drawdown_sol: float = 5.0
+    drawdown_window_seconds: float = 86_400  # 24 часа
+    drawdown_check_interval_seconds: float = 300  # throttle — полное сканирование trade_log на каждой проверке
 
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":

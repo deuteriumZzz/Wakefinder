@@ -21,7 +21,7 @@ watcher. Бандл = [buy_leg, sell_leg, tip] — три подписанные
 import asyncio
 import base64
 import logging
-import os
+import time
 
 from jupiter_python_sdk.jupiter import Jupiter
 from solana.rpc.async_api import AsyncClient
@@ -36,11 +36,12 @@ from spl.token.instructions import get_associated_token_address
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.simulator import TwoPoolArbSimulator
 from wakefinder.chains.solana.watcher import RaydiumVaultWatcher
-from wakefinder.common import trade_log
+from wakefinder.common import killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.allowlist import validate_token_allowlist
 from wakefinder.common.config import get_settings
+from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle, PendingSwap, SimResult
 
 SLIPPAGE_BPS = 100  # допуск 1%, тот же принцип что и в ETH-версии
@@ -117,12 +118,26 @@ async def run(
     sender = JitoBundleSender(settings.jito_block_engine_url, keypair)
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
     consecutive_failures = 0
+    last_drawdown_check = 0.0
 
     async for swap in watcher.watch():
-        if os.path.exists(settings.kill_switch_file):
-            logger.warning("файл kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
+        if killswitch.is_engaged(settings.kill_switch_file):
+            logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
             send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/solana arb] kill switch присутствует — бот остановлен")
             return
+
+        now = time.time()
+        if now - last_drawdown_check >= settings.drawdown_check_interval_seconds:
+            last_drawdown_check = now
+            status = check_drawdown(settings.trade_log_file, "solana", settings.drawdown_window_seconds, int(settings.max_drawdown_sol * 10**9))
+            if status.breached:
+                logger.critical("просадка за окно %d lamports превысила лимит — включаю kill switch", status.realized_pnl)
+                send_telegram_alert(
+                    settings.telegram_bot_token, settings.telegram_chat_id,
+                    f"[wakefinder/solana arb] просадка {status.realized_pnl} lamports превысила лимит — kill switch",
+                )
+                killswitch.engage(settings.kill_switch_file, "drawdown breach: solana arb")
+                return
 
         sim = await simulator.simulate(swap)
         if not sim.profitable:
@@ -180,7 +195,7 @@ async def run(
                 settings.telegram_bot_token, settings.telegram_chat_id,
                 f"[wakefinder/solana arb] {consecutive_failures} бандлов подряд не попали в блок — авто-kill switch",
             )
-            open(settings.kill_switch_file, "a").close()  # блокирующий вызов ок: run() сразу завершается
+            killswitch.engage(settings.kill_switch_file, "consecutive failures: solana arb")
             return
 
 

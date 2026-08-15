@@ -14,6 +14,28 @@ pip install -e ".[dev]"
 cp .env.example .env  # впишите свои RPC/ключи — никогда не коммитьте .env
 ```
 
+## Портфельный риск-контроль (все 4 процесса: ETH/Solana × арбитраж/копитрейдинг)
+
+- **Единый kill switch** (`wakefinder/common/killswitch.py`) — все 4 процесса
+  проверяют ОДИН файл (по умолчанию абсолютный путь в домашней директории,
+  не зависит от рабочей директории процесса). Управление:
+  ```bash
+  python -m wakefinder.common.killswitch stop     # остановить всё
+  python -m wakefinder.common.killswitch resume    # снять
+  python -m wakefinder.common.killswitch status
+  ```
+- **Circuit breaker по просадке** (`wakefinder/common/drawdown.py`) —
+  независимо от `MAX_CONSECUTIVE_FAILURES` (тот ловит только "бандл не
+  попадает в блок"), считает суммарную РЕАЛИЗОВАННУЮ прибыль/убыток по всем
+  стратегиям одной сети за скользящее окно (`DRAWDOWN_WINDOW_SECONDS`, по
+  умолчанию 24ч) и сам включает kill switch при превышении
+  `MAX_DRAWDOWN_ETH` / `MAX_DRAWDOWN_SOL`. Не учитывает нереализованную
+  стоимость открытых копитрейд-позиций (см. docstring модуля) — это
+  сознательно урезанная v1, не тихий недосмотр.
+- Оба реализуют Tier 0 из архитектурного аудита; третий пункт Tier 0 —
+  реальная валидация на testnet/devnet — не может быть сделана автоматически,
+  нужны профинансированные тестовые кошельки и живой RPC-провайдер.
+
 ## Операционные требования (путь Ethereum)
 
 - **RPC-провайдер обязан поддерживать `eth_getRawTransactionByHash`.** Не
