@@ -124,7 +124,7 @@ async def _exit_position(client, jupiter, sender, keypair, tip, positions, posit
     trade_log.log_attempt(trade_log_file, "solana", "", amount_out, included, [], strategy="copytrade_exit", wallet=pos.watched_wallet)
     if reason == "стоп-лосс":
         settings = get_settings()
-        send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, f"[wakefinder/solana copytrade] стоп-лосс: токен={token} included={included}")
+        send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, f"[wakefinder/solana copytrade] стоп-лосс: токен={token} included={included}")
 
 
 async def _unrealized_pnl(jupiter, positions: dict[str, Position]) -> int:
@@ -202,7 +202,7 @@ async def run(
         async for swap in with_reconnect(watcher.watch):
             if killswitch.is_engaged(settings.kill_switch_file):
                 logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
-                send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/solana copytrade] kill switch присутствует — бот остановлен")
+                send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, "[wakefinder/solana copytrade] kill switch присутствует — бот остановлен")
                 return
 
             now = time.time()
@@ -221,7 +221,7 @@ async def run(
                         status.realized_pnl, status.unrealized_pnl,
                     )
                     send_telegram_alert(
-                        settings.telegram_bot_token, settings.telegram_chat_id,
+                        settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
                         f"[wakefinder/solana copytrade] просадка realized={status.realized_pnl} "
                         f"unrealized={status.unrealized_pnl} lamports превысила лимит — kill switch",
                     )

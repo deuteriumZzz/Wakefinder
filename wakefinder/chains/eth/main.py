@@ -176,7 +176,7 @@ async def run(
         async for swap in with_reconnect(watcher.watch):
             if killswitch.is_engaged(settings.kill_switch_file):
                 logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
-                send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/eth arb] kill switch присутствует — бот остановлен")
+                send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, "[wakefinder/eth arb] kill switch присутствует — бот остановлен")
                 heartbeat_task.cancel()
                 return
 
@@ -187,7 +187,7 @@ async def run(
                 if status.breached:
                     logger.critical("просадка за окно %d wei превысила лимит — включаю kill switch", status.realized_pnl)
                     send_telegram_alert(
-                        settings.telegram_bot_token, settings.telegram_chat_id,
+                        settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
                         f"[wakefinder/eth arb] просадка {status.realized_pnl} wei превысила лимит — kill switch",
                     )
                     killswitch.engage(settings.kill_switch_file, "drawdown breach: eth arb")
@@ -235,7 +235,7 @@ async def run(
                     consecutive_failures,
                 )
                 send_telegram_alert(
-                    settings.telegram_bot_token, settings.telegram_chat_id,
+                    settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
                     f"[wakefinder/eth arb] {consecutive_failures} бандлов подряд не попали в блок — авто-kill switch",
                 )
                 killswitch.engage(settings.kill_switch_file, "consecutive failures: eth arb")

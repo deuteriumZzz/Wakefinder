@@ -106,8 +106,8 @@ class Settings(BaseSettings):
 
     # Telegram-алерты на критичные события (kill switch, стоп-лосс, серия
     # неудач). Пустые значения = алерты выключены, не обязательны.
-    telegram_bot_token: str = ""
-    telegram_chat_id: str = ""
+    telegram_bot_token: SecretStr = SecretStr("")
+    telegram_chat_id: str = ""  # не секрет сам по себе (не даёт доступа ни к чему без токена)
 
     # Портфельный circuit breaker по РЕАЛИЗОВАННОЙ просадке за скользящее
     # окно, агрегированной по всем стратегиям одной сети (arb + copytrade

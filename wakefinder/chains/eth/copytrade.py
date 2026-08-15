@@ -224,7 +224,7 @@ async def _exit_position(w3, account, router_address, chain_id, token: str, reas
     trade_log.log_attempt(trade_log_file, "eth", pos.pool_address, expected_out, included, [tx_hash], strategy="copytrade_exit", wallet=pos.watched_wallet)
     if reason == "стоп-лосс":
         settings = get_settings()
-        send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, f"[wakefinder/eth copytrade] стоп-лосс: токен={token} included={included}")
+        send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, f"[wakefinder/eth copytrade] стоп-лосс: токен={token} included={included}")
 
 
 async def _stop_loss_loop(w3, account, router_address, chain_id, positions, positions_lock, positions_file, trade_log_file, stop_loss_pct, interval_seconds):
@@ -279,7 +279,7 @@ async def run(
             async for swap in with_reconnect(watcher.watch):
                 if killswitch.is_engaged(settings.kill_switch_file):
                     logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
-                    send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/eth copytrade] kill switch присутствует — бот остановлен")
+                    send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, "[wakefinder/eth copytrade] kill switch присутствует — бот остановлен")
                     return
 
                 now = time.time()
@@ -298,7 +298,7 @@ async def run(
                             status.realized_pnl, status.unrealized_pnl,
                         )
                         send_telegram_alert(
-                            settings.telegram_bot_token, settings.telegram_chat_id,
+                            settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
                             f"[wakefinder/eth copytrade] просадка realized={status.realized_pnl} "
                             f"unrealized={status.unrealized_pnl} wei превысила лимит — kill switch",
                         )
