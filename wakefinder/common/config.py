@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     solana_rpc_ws_url: SecretStr | None = None
     solana_rpc_http_url: SecretStr | None = None
     solana_private_key: SecretStr | None = None
+    solana_wsol_address: str = "So11111111111111111111111111111111111111112"
     jito_block_engine_url: str = "https://mainnet.block-engine.jito.wtf/api/v1"
     max_capital_per_bundle_sol: float = 0.5
 

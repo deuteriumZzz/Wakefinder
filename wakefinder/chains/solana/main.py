@@ -118,7 +118,7 @@ async def run(
     jupiter = Jupiter(client, keypair)
 
     watcher = RaydiumVaultWatcher(settings.solana_rpc_ws_url.get_secret_value(), pools, min_amount_in)
-    simulator = TwoPoolArbSimulator(client, reference_pools)
+    simulator = TwoPoolArbSimulator(client, reference_pools, settings.solana_wsol_address, jupiter)
     sender = JitoBundleSender(settings.jito_block_engine_url, keypair)
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
     consecutive_failures = 0

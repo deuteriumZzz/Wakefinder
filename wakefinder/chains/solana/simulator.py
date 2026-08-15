@@ -24,10 +24,32 @@ ESTIMATED_TX_FEE_LAMPORTS = 10_000
 
 
 class TwoPoolArbSimulator(Simulator):
-    def __init__(self, client: AsyncClient, reference_pools: dict[str, dict[str, str]]):
-        """reference_pools: {pool_id_целевого_пула: {"base_vault":.., "quote_vault":.., "base_mint":.., "quote_mint":.., "dex_label":.., "target_base_vault":.., "target_quote_vault":.., "target_dex_label":..}}"""
+    def __init__(self, client: AsyncClient, reference_pools: dict[str, dict[str, str]], wsol_mint: str, jupiter=None):
+        """reference_pools: {pool_id_целевого_пула: {"base_vault":.., "quote_vault":.., "base_mint":.., "quote_mint":.., "dex_label":.., "target_base_vault":.., "target_quote_vault":.., "target_dex_label":..}}.
+        jupiter — опционален: нужен только когда token_in != wsol_mint (см. _lamports_to_token_in)."""
         self.client = client
         self.reference_pools = reference_pools
+        self.wsol_mint = wsol_mint
+        self.jupiter = jupiter
+
+    async def _lamports_to_token_in(self, token_in: str, lamports: int) -> int | None:
+        """Конвертирует сумму в lamports (газ, кэп по капиталу) в эквивалент в
+        единицах token_in через Jupiter-квоту wSOL->token_in. Когда token_in
+        уже wSOL — возвращает как есть, без RPC-вызова (быстрый путь для
+        доминирующего случая). None означает "не удалось оценить" (нет
+        jupiter-клиента или для пары wSOL/token_in нет маршрута)."""
+        if token_in.lower() == self.wsol_mint.lower():
+            return lamports
+        if self.jupiter is None:
+            return None
+        try:
+            quote = await self.jupiter.quote(
+                input_mint=self.wsol_mint, output_mint=token_in, amount=lamports,
+                slippage_bps=100, only_direct_routes=True,
+            )
+            return int(quote["outAmount"])
+        except Exception:
+            return None
 
     async def _reserves(self, base_vault: str, quote_vault: str, base_mint: str, token_in: str) -> tuple[int, int]:
         base_resp = await self.client.get_token_account_balance(Pubkey.from_string(base_vault))
@@ -55,19 +77,29 @@ class TwoPoolArbSimulator(Simulator):
         if ref_reserve_in < settings.min_reference_liquidity_sol * 10**9:
             return SimResult(profitable=False, expected_profit_wei=0, reason="референсный пул слишком тонкий — риск манипуляции ценой")
 
-        # ponytail: тот же приём, что и в ETH-версии — предполагаем, что
-        # token_in имеет 9 decimals (wrapped SOL), кэп задан в сырых lamports.
-        lamports_cap = int(settings.max_capital_per_bundle_sol * 10**9)
-        upper_bound = min(lamports_cap, ref_reserve_in, target_reserve_out)
-
+        # Кэп по капиталу и газ считаются в реальных lamports, затем
+        # конвертируются в единицы token_in через Jupiter — см. docstring
+        # _lamports_to_token_in(). Быстрый путь без quote-запроса сохранён
+        # для доминирующего случая token_in==wSOL.
+        capital_cap_lamports = int(settings.max_capital_per_bundle_sol * 10**9)
         gas_cost_lamports = 2 * ESTIMATED_TX_FEE_LAMPORTS  # две ноги + tip-транзакция
+
+        capital_cap_in_token_in = await self._lamports_to_token_in(swap.token_in, capital_cap_lamports)
+        gas_cost_in_token_in = await self._lamports_to_token_in(swap.token_in, gas_cost_lamports)
+        if capital_cap_in_token_in is None or gas_cost_in_token_in is None:
+            return SimResult(
+                profitable=False, expected_profit_wei=0,
+                reason="не удалось сконвертировать lamports-стоимость газа/кэпа в token_in — нет маршрута wSOL/token_in",
+            )
+
+        upper_bound = min(capital_cap_in_token_in, ref_reserve_in, target_reserve_out)
 
         amount_in, profit = optimal_arb(
             buy_reserve_in=ref_reserve_in,
             buy_reserve_out=ref_reserve_out,
             sell_reserve_out=target_reserve_out,
             sell_reserve_in=target_reserve_in,
-            gas_cost_wei=gas_cost_lamports,
+            gas_cost_wei=gas_cost_in_token_in,
             upper_bound=upper_bound,
         )
         if profit <= 0 or amount_in <= 0:
