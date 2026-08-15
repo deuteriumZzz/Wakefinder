@@ -48,6 +48,7 @@ from wakefinder.chains.eth.simulator import GAS_LIMIT, TwoPoolArbSimulator
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
 from wakefinder.common import trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
+from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.allowlist import validate_token_allowlist
 from wakefinder.common.config import get_settings
 from wakefinder.common.interfaces import Bundle, PendingSwap, SimResult
@@ -168,6 +169,7 @@ async def run(
         async for swap in watcher.watch():
             if os.path.exists(settings.kill_switch_file):
                 logger.warning("файл kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
+                send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/eth arb] kill switch присутствует — бот остановлен")
                 return
 
             sim = await simulator.simulate(swap)
@@ -209,6 +211,10 @@ async def run(
                 logger.critical(
                     "%d бандлов подряд не попали в блок — включаю kill switch, проверьте бота вручную",
                     consecutive_failures,
+                )
+                send_telegram_alert(
+                    settings.telegram_bot_token, settings.telegram_chat_id,
+                    f"[wakefinder/eth arb] {consecutive_failures} бандлов подряд не попали в блок — авто-kill switch",
                 )
                 open(settings.kill_switch_file, "a").close()  # блокирующий вызов ок: run() сразу завершается, цикл никому больше не нужен
                 return

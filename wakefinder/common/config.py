@@ -84,6 +84,16 @@ class Settings(BaseSettings):
     copytrade_min_consensus_wallets: int = Field(default=2, ge=1)
     copytrade_consensus_window_seconds: float = 120
 
+    # Кэп на СУММАРНУЮ экспозицию по всем открытым копитрейд-позициям сразу
+    # (не только на одну сделку) — иначе несколько последовательных входов по
+    # COPYTRADE_SIZE_PCT каждый могут незаметно съесть большую часть баланса.
+    copytrade_max_total_exposure_pct: float = Field(default=20.0, gt=0, le=100)
+
+    # Telegram-алерты на критичные события (kill switch, стоп-лосс, серия
+    # неудач). Пустые значения = алерты выключены, не обязательны.
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
         if self.eth_router_address.lower() not in KNOWN_ROUTERS:

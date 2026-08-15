@@ -31,7 +31,9 @@ from spl.token.instructions import get_associated_token_address
 from wakefinder.chains.solana.main import _build_tip_tx, _sign_unsigned_tx, _tip_lamports
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.wallet_watcher import WalletSwapWatcher
+from wakefinder.common import trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
+from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
 from wakefinder.common.interfaces import Bundle
@@ -108,18 +110,22 @@ async def _has_sufficient_balance(client: AsyncClient, owner: Pubkey, token_mint
     return int(resp.value.amount) >= amount_in
 
 
-async def _exit_position(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, token: str, reason: str):
+async def _exit_position(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, trade_log_file, token: str, reason: str):
     async with positions_lock:
         pos = positions.pop(token, None)
         if pos is not None:
             _save_positions(positions_file, positions)
     if pos is None:
         return
-    included, _ = await _swap_via_jupiter_and_send(client, jupiter, sender, keypair, tip, pos.token, pos.token_in, pos.amount_held)
+    included, amount_out = await _swap_via_jupiter_and_send(client, jupiter, sender, keypair, tip, pos.token, pos.token_in, pos.amount_held)
     logger.info("копитрейд-выход (%s): токен=%s included=%s", reason, token, included)
+    trade_log.log_attempt(trade_log_file, "solana", "", amount_out, included, [], strategy="copytrade_exit", wallet=pos.watched_wallet)
+    if reason == "стоп-лосс":
+        settings = get_settings()
+        send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, f"[wakefinder/solana copytrade] стоп-лосс: токен={token} included={included}")
 
 
-async def _stop_loss_loop(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, stop_loss_pct, interval_seconds):
+async def _stop_loss_loop(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, trade_log_file, stop_loss_pct, interval_seconds):
     while True:
         await asyncio.sleep(interval_seconds)
         async with positions_lock:
@@ -136,7 +142,7 @@ async def _stop_loss_loop(client, jupiter, sender, keypair, tip, positions, posi
                 continue
             floor = pos.entry_amount_in * (100 - stop_loss_pct) // 100
             if current_value < floor:
-                await _exit_position(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, token, "стоп-лосс")
+                await _exit_position(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, trade_log_file, token, "стоп-лосс")
 
 
 async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] = frozenset()):
@@ -159,7 +165,7 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
     stop_loss_task = asyncio.create_task(
         _stop_loss_loop(
             client, jupiter, sender, keypair, tip, positions, positions_lock,
-            settings.solana_copytrade_positions_file, settings.copytrade_stop_loss_pct,
+            settings.solana_copytrade_positions_file, settings.trade_log_file, settings.copytrade_stop_loss_pct,
             settings.copytrade_stop_loss_check_interval_seconds,
         )
     )
@@ -168,6 +174,7 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
         async for swap in watcher.watch():
             if os.path.exists(settings.kill_switch_file):
                 logger.warning("файл kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
+                send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/solana copytrade] kill switch присутствует — бот остановлен")
                 return
 
             if token_allowlist and swap.token_out.lower() not in {t.lower() for t in token_allowlist}:
@@ -179,13 +186,16 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
             if holds_token_in:
                 await _exit_position(
                     client, jupiter, sender, keypair, tip, positions, positions_lock,
-                    settings.solana_copytrade_positions_file, swap.token_in, "зеркальный выход за китом",
+                    settings.solana_copytrade_positions_file, settings.trade_log_file, swap.token_in, "зеркальный выход за китом",
                 )
                 consensus.clear(swap.token_in)
                 continue
 
+            balance = (await client.get_balance(keypair.pubkey())).value
+
             async with positions_lock:
                 already_held = swap.token_out in positions
+                current_exposure = sum(p.entry_amount_in for p in positions.values())
             if already_held:
                 continue
 
@@ -194,8 +204,14 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
                 continue
             consensus.clear(swap.token_out)
 
-            balance = (await client.get_balance(keypair.pubkey())).value
             amount_in = int(balance * settings.copytrade_size_pct / 100)
+            exposure_cap = int(balance * settings.copytrade_max_total_exposure_pct / 100)
+            if current_exposure + amount_in > exposure_cap:
+                logger.info(
+                    "пропуск входа: суммарная экспозиция %d + новый вход %d превысили бы кэп %d",
+                    current_exposure, amount_in, exposure_cap,
+                )
+                continue
             if amount_in <= 0:
                 continue
             if not await _has_sufficient_balance(client, keypair.pubkey(), swap.token_in, amount_in):
@@ -208,6 +224,7 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
                 "копитрейд-вход (консенсус): токен=%s триггер-кошелёк=%s amount_in=%d included=%s",
                 swap.token_out, swap.sender, amount_in, included,
             )
+            trade_log.log_attempt(settings.trade_log_file, "solana", "", amount_in, included, [], strategy="copytrade_entry", wallet=swap.sender)
             if not included:
                 continue
 

@@ -13,6 +13,14 @@
 COPYTRADE_CONSENSUS_WINDOW_SECONDS — один кит может ошибаться, несколько
 независимых китов почти одновременно — сильнее сигнал.
 
+Осознанное отличие от арбитража: наши собственные сделки (вход и выход) идут
+в ПУБЛИЧНЫЙ мемпул (`send_raw_transaction`), не через Flashbots. Watcher уже
+реагирует на PENDING-транзакцию кита (не дожидаясь подтверждения), и здесь
+нужна максимальная скорость входа, пока рынок ещё не отреагировал — relay-хоп
+Flashbots этому не помогает. Плата за это: наша транзакция видна в публичном
+мемпуле и теоретически может быть засэндвичена другими MEV-ботами — та же
+атака, которую применяет арбитражная часть этого проекта против чужих сделок.
+
 Выход по двум независимым триггерам:
 - зеркальный: любой watched-кошелёк продаёт токен, который мы держим -> продаём
 - стоп-лосс (фоновая задача): цена позиции упала на COPYTRADE_STOP_LOSS_PCT от
@@ -39,15 +47,17 @@ from eth_account import Account
 from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
 from wakefinder.chains.eth.abi import PAIR_ABI, ROUTER_ABI
-from wakefinder.chains.eth.sender import FlashbotsBundleSender
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
+from wakefinder.common import trade_log
+from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.amm import get_amount_out
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
-from wakefinder.common.interfaces import Bundle
 
 SLIPPAGE_BPS = 100
 GAS_LIMIT = 200_000
+RECEIPT_TIMEOUT_SECONDS = 60
+RECEIPT_POLL_SECONDS = 2
 _ENCODER = Web3()
 
 logger = logging.getLogger("wakefinder.eth.copytrade")
@@ -77,11 +87,6 @@ def _save_positions(path: str, positions: dict[str, Position]) -> None:
         json.dump({k: asdict(v) for k, v in positions.items()}, f, indent=2)
 
 
-def _to_0x_hex(raw: bytes) -> str:
-    h = bytes(raw).hex()
-    return h if h.startswith("0x") else "0x" + h
-
-
 def _sign_swap(router_address, account, chain_id, nonce, max_fee, priority_fee, path, amount_in, amount_out_min) -> bytes:
     router = _ENCODER.eth.contract(address=router_address, abi=ROUTER_ABI)
     tx = router.functions.swapExactTokensForTokens(
@@ -108,31 +113,56 @@ async def _reserves(w3: AsyncWeb3, pool_address: str, token_in: str) -> tuple[in
     return r1, r0
 
 
+async def _wait_for_receipt(w3: AsyncWeb3, tx_hash, timeout_seconds: float = RECEIPT_TIMEOUT_SECONDS) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            receipt = await w3.eth.get_transaction_receipt(tx_hash)
+        except Exception:
+            receipt = None
+        if receipt is not None:
+            return receipt.get("status") == 1
+        await asyncio.sleep(RECEIPT_POLL_SECONDS)
+    return False  # не дождались — считаем неудачей, а не зависаем навсегда
+
+
 async def _send_single_swap(
-    w3: AsyncWeb3, account, sender: FlashbotsBundleSender, router_address: str, chain_id: int,
+    w3: AsyncWeb3, account, router_address: str, chain_id: int,
     path: list[str], amount_in: int, amount_out_min: int,
-) -> bool:
+) -> tuple[bool, str]:
+    """Отправляет в публичный мемпул напрямую (не через Flashbots — см. docstring
+    модуля про компромисс скорости против защиты от сэндвича). Возвращает
+    (успех, tx_hash)."""
     nonce = await w3.eth.get_transaction_count(account.address, "pending")
     latest = await w3.eth.get_block("latest")
     priority_fee = Web3.to_wei(2, "gwei")
     max_fee = latest["baseFeePerGas"] * 2 + priority_fee
     raw = _sign_swap(router_address, account, chain_id, nonce, max_fee, priority_fee, path, amount_in, amount_out_min)
-    block_number = await w3.eth.block_number
-    bundle = Bundle(raw_txs=[_to_0x_hex(raw)], target_block=block_number + 1)
-    return await sender.send(bundle)
+    tx_hash = await w3.eth.send_raw_transaction(raw)
+    ok = await _wait_for_receipt(w3, tx_hash)
+    return ok, tx_hash.hex()
 
 
 async def _try_enter(
-    w3, account, sender, router_address, chain_id, token_in, token_out, pool_address, watched_wallet,
-    size_pct, positions, positions_lock, positions_file,
+    w3, account, router_address, chain_id, token_in, token_out, pool_address, watched_wallet,
+    size_pct, max_total_exposure_pct, positions, positions_lock, positions_file, trade_log_file,
 ):
+    balance = await w3.eth.get_balance(account.address)
+
     async with positions_lock:
         if token_out.lower() in positions:
             return  # уже держим этот токен, не наращиваем позицию повторно
+        current_exposure = sum(p.entry_amount_in for p in positions.values())
 
-    balance = await w3.eth.get_balance(account.address)
     # ponytail: тот же приём, что и в арбитраже — предполагаем token_in 18-decimal (WETH)
     amount_in = int(balance * size_pct / 100)
+    exposure_cap = int(balance * max_total_exposure_pct / 100)
+    if current_exposure + amount_in > exposure_cap:
+        logger.info(
+            "пропуск входа: суммарная экспозиция %d + новый вход %d превысили бы кэп %d",
+            current_exposure, amount_in, exposure_cap,
+        )
+        return
     if amount_in <= 0:
         return
 
@@ -142,8 +172,9 @@ async def _try_enter(
         return
     amount_out_min = expected_out * (10_000 - SLIPPAGE_BPS) // 10_000
 
-    included = await _send_single_swap(w3, account, sender, router_address, chain_id, [token_in, token_out], amount_in, amount_out_min)
+    included, tx_hash = await _send_single_swap(w3, account, router_address, chain_id, [token_in, token_out], amount_in, amount_out_min)
     logger.info("копитрейд-вход (консенсус): токен=%s триггер-кошелёк=%s amount_in=%d included=%s", token_out, watched_wallet, amount_in, included)
+    trade_log.log_attempt(trade_log_file, "eth", pool_address, amount_in, included, [tx_hash], strategy="copytrade_entry", wallet=watched_wallet)
     if not included:
         return
 
@@ -156,7 +187,7 @@ async def _try_enter(
         _save_positions(positions_file, positions)
 
 
-async def _exit_position(w3, account, sender, router_address, chain_id, token: str, reason: str, positions, positions_lock, positions_file):
+async def _exit_position(w3, account, router_address, chain_id, token: str, reason: str, positions, positions_lock, positions_file, trade_log_file):
     async with positions_lock:
         pos = positions.get(token.lower())
         if pos is None:
@@ -168,13 +199,17 @@ async def _exit_position(w3, account, sender, router_address, chain_id, token: s
     expected_out = get_amount_out(pos.amount_held, reserve_in, reserve_out)
     amount_out_min = expected_out * (10_000 - SLIPPAGE_BPS) // 10_000
 
-    included = await _send_single_swap(
-        w3, account, sender, router_address, chain_id, [pos.token, pos.token_in], pos.amount_held, amount_out_min
+    included, tx_hash = await _send_single_swap(
+        w3, account, router_address, chain_id, [pos.token, pos.token_in], pos.amount_held, amount_out_min
     )
     logger.info("копитрейд-выход (%s): токен=%s included=%s", reason, token, included)
+    trade_log.log_attempt(trade_log_file, "eth", pos.pool_address, expected_out, included, [tx_hash], strategy="copytrade_exit", wallet=pos.watched_wallet)
+    if reason == "стоп-лосс":
+        settings = get_settings()
+        send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, f"[wakefinder/eth copytrade] стоп-лосс: токен={token} included={included}")
 
 
-async def _stop_loss_loop(w3, account, sender, router_address, chain_id, positions, positions_lock, positions_file, stop_loss_pct, interval_seconds):
+async def _stop_loss_loop(w3, account, router_address, chain_id, positions, positions_lock, positions_file, trade_log_file, stop_loss_pct, interval_seconds):
     while True:
         await asyncio.sleep(interval_seconds)
         async with positions_lock:
@@ -188,13 +223,12 @@ async def _stop_loss_loop(w3, account, sender, router_address, chain_id, positio
                 continue
             floor = pos.entry_amount_in * (100 - stop_loss_pct) // 100
             if current_value < floor:
-                await _exit_position(w3, account, sender, router_address, chain_id, token, "стоп-лосс", positions, positions_lock, positions_file)
+                await _exit_position(w3, account, router_address, chain_id, token, "стоп-лосс", positions, positions_lock, positions_file, trade_log_file)
 
 
 async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] = frozenset()):
     settings = get_settings()
     account = Account.from_key(settings.eth_private_key.get_secret_value())
-    fb_signer = Account.from_key(settings.flashbots_signer_key.get_secret_value())
 
     positions = _load_positions(settings.copytrade_positions_file)
     positions_lock = asyncio.Lock()
@@ -207,12 +241,11 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
             w3, settings.eth_router_address, pool_registry={}, min_amount_in=2**256 - 1,
             watched_wallets=watched_wallets, factory_address=settings.eth_factory_address,
         )
-        sender = FlashbotsBundleSender(rpc_url=settings.eth_rpc_http_url.get_secret_value(), signer_account=fb_signer)
 
         stop_loss_task = asyncio.create_task(
             _stop_loss_loop(
-                w3, account, sender, settings.eth_router_address, chain_id, positions, positions_lock,
-                settings.copytrade_positions_file, settings.copytrade_stop_loss_pct,
+                w3, account, settings.eth_router_address, chain_id, positions, positions_lock,
+                settings.copytrade_positions_file, settings.trade_log_file, settings.copytrade_stop_loss_pct,
                 settings.copytrade_stop_loss_check_interval_seconds,
             )
         )
@@ -221,6 +254,7 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
             async for swap in watcher.watch():
                 if os.path.exists(settings.kill_switch_file):
                     logger.warning("файл kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
+                    send_telegram_alert(settings.telegram_bot_token, settings.telegram_chat_id, "[wakefinder/eth copytrade] kill switch присутствует — бот остановлен")
                     return
 
                 if token_allowlist and swap.token_out.lower() not in {t.lower() for t in token_allowlist}:
@@ -231,8 +265,8 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
 
                 if holds_token_in:
                     await _exit_position(
-                        w3, account, sender, settings.eth_router_address, chain_id, swap.token_in,
-                        "зеркальный выход за китом", positions, positions_lock, settings.copytrade_positions_file,
+                        w3, account, settings.eth_router_address, chain_id, swap.token_in,
+                        "зеркальный выход за китом", positions, positions_lock, settings.copytrade_positions_file, settings.trade_log_file,
                     )
                     consensus.clear(swap.token_in)
                     continue
@@ -245,9 +279,9 @@ async def run(watched_wallets: frozenset[str], token_allowlist: frozenset[str] =
                 consensus.clear(swap.token_out)
 
                 await _try_enter(
-                    w3, account, sender, settings.eth_router_address, chain_id, swap.token_in, swap.token_out,
-                    swap.pool_address, swap.sender, settings.copytrade_size_pct, positions, positions_lock,
-                    settings.copytrade_positions_file,
+                    w3, account, settings.eth_router_address, chain_id, swap.token_in, swap.token_out,
+                    swap.pool_address, swap.sender, settings.copytrade_size_pct, settings.copytrade_max_total_exposure_pct,
+                    positions, positions_lock, settings.copytrade_positions_file, settings.trade_log_file,
                 )
         finally:
             stop_loss_task.cancel()
