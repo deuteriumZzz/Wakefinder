@@ -28,6 +28,16 @@ ROUTER_ABI = [
         "outputs": [{"name": "amounts", "type": "uint256[]"}],
         "payable": True,
     },
+    {
+        "name": "getAmountsOut",
+        "type": "function",
+        "inputs": [
+            {"name": "amountIn", "type": "uint256"},
+            {"name": "path", "type": "address[]"},
+        ],
+        "outputs": [{"name": "amounts", "type": "uint256[]"}],
+        "stateMutability": "view",
+    },
 ]
 
 ERC20_ABI = [

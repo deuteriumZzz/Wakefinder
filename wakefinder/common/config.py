@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     eth_rpc_ws_url: SecretStr
     eth_rpc_http_url: SecretStr
     eth_router_address: str = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"  # Uniswap V2 Router02
+    eth_weth_address: str = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
     eth_private_key: SecretStr
     flashbots_signer_key: SecretStr
 

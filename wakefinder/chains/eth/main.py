@@ -167,7 +167,7 @@ async def run(
     async with AsyncWeb3.persistent_websocket(provider) as w3:
         chain_id = await w3.eth.chain_id
         watcher = UniswapV2Watcher(w3, settings.eth_router_address, pool_registry, min_amount_in, watched_wallets)
-        simulator = TwoPoolArbSimulator(w3, settings.eth_router_address, reference_pools)
+        simulator = TwoPoolArbSimulator(w3, settings.eth_router_address, reference_pools, settings.eth_weth_address)
         sender = FlashbotsBundleSender(
             rpc_url=settings.eth_rpc_http_url.get_secret_value(),
             signer_account=fb_signer,

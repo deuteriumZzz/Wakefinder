@@ -56,6 +56,30 @@ class FakeContract:
         self.functions = _Functions((reserve0, reserve1, 0), token0)
 
 
+class _RaisingCallable:
+    def call(self, block_identifier=None):
+        raise RuntimeError("нет прямой пары WETH/token_in на роутере")
+
+
+class _RouterFunctions:
+    def __init__(self, converter):
+        self._converter = converter  # amount_in -> converted amount, либо None = ревертит (нет прямой пары)
+
+    def getAmountsOut(self, amount_in, path):
+        result = self._converter(amount_in)
+        if result is None:
+            return _RaisingCallable()
+        return _Callable([amount_in, result])
+
+
+class FakeRouter:
+    """converter=lambda _: None имитирует роутер без прямой пары WETH/token_in (getAmountsOut ревертит)."""
+
+    def __init__(self, address: str, converter):
+        self.address = address
+        self.functions = _RouterFunctions(converter)
+
+
 class FakeEth:
     def __init__(self, block_number: int, contracts: dict[str, FakeContract]):
         self.block_number = _Awaitable(block_number)
@@ -91,6 +115,7 @@ def test_simulator_buys_in_reference_sells_in_target():
         w3,
         target_router="0xTargetRouter",
         reference_pools={target_pool.lower(): {"pool": ref_pool, "router": "0xRefRouter"}},
+        weth_address=token_in,  # token_in уже "нативный" -> быстрый путь без RPC-конвертации
     )
 
     swap = PendingSwap(tx_hash="0xabc", pool_address=target_pool, token_in=token_in, token_out=token_out, amount_in=10 * scale)
@@ -125,6 +150,7 @@ def test_simulator_rejects_thin_reference_pool():
         w3,
         target_router="0xTargetRouter",
         reference_pools={target_pool.lower(): {"pool": ref_pool, "router": "0xRefRouter"}},
+        weth_address=token_in,
     )
 
     swap = PendingSwap(tx_hash="0xabc", pool_address=target_pool, token_in=token_in, token_out=token_out, amount_in=10 * scale)
@@ -144,7 +170,7 @@ def test_simulator_no_opportunity_when_pools_already_balanced():
     w3 = FakeW3(FakeEth(block_number=1, contracts={pool_a.lower(): a, pool_b.lower(): b}))
 
     simulator = TwoPoolArbSimulator(
-        w3, target_router="0xR1", reference_pools={pool_a.lower(): {"pool": pool_b, "router": "0xR2"}}
+        w3, target_router="0xR1", reference_pools={pool_a.lower(): {"pool": pool_b, "router": "0xR2"}}, weth_address=token_in
     )
     # крошечный своп на сбалансированных пулах -> прибыли после газа быть не должно
     swap = PendingSwap(tx_hash="0xdef", pool_address=pool_a, token_in=token_in, token_out="0xOUT", amount_in=1)
@@ -153,8 +179,73 @@ def test_simulator_no_opportunity_when_pools_already_balanced():
     assert not sim.profitable
 
 
+def test_simulator_converts_gas_and_cap_for_non_weth_token_in():
+    weth = "0xWETH"
+    token_in = "0xUSDC"  # НЕ weth_address -> должен пойти через getAmountsOut на роутере
+    token_out = "0xOUT"
+    target_pool = "0xTARGET"
+    ref_pool = "0xREF"
+    router_address = "0xTargetRouter"
+
+    scale = 10**18
+    target = FakeContract(target_pool, reserve0=1_000 * scale, reserve1=800 * scale, token0=token_in)
+    ref = FakeContract(ref_pool, reserve0=1_000 * scale, reserve1=1_000 * scale, token0=token_in)
+    # курс роутера: 1 wei ETH -> 2 wei token_in (не 1:1, чтобы отличить от
+    # "конвертация случайно совпала с identity" — но и не запредельный, чтобы
+    # газ не задавил профит арбитража, как в исходном баге)
+    router = FakeRouter(router_address, converter=lambda wei: wei * 2)
+
+    w3 = FakeW3(FakeEth(block_number=100, contracts={
+        target_pool.lower(): target, ref_pool.lower(): ref, router_address.lower(): router,
+    }))
+
+    simulator = TwoPoolArbSimulator(
+        w3, target_router=router_address,
+        reference_pools={target_pool.lower(): {"pool": ref_pool, "router": "0xRefRouter"}},
+        weth_address=weth,
+    )
+    swap = PendingSwap(tx_hash="0xabc", pool_address=target_pool, token_in=token_in, token_out=token_out, amount_in=10 * scale)
+
+    sim = asyncio.run(simulator.simulate(swap))
+
+    assert sim.profitable
+    assert sim.expected_profit_wei > 0
+
+
+def test_simulator_rejects_when_conversion_has_no_direct_pair():
+    weth = "0xWETH"
+    token_in = "0xUSDC"
+    token_out = "0xOUT"
+    target_pool = "0xTARGET"
+    ref_pool = "0xREF"
+    router_address = "0xTargetRouter"
+
+    scale = 10**18
+    target = FakeContract(target_pool, reserve0=1_000 * scale, reserve1=800 * scale, token0=token_in)
+    ref = FakeContract(ref_pool, reserve0=1_000 * scale, reserve1=1_000 * scale, token0=token_in)
+    router = FakeRouter(router_address, converter=lambda wei: None)  # нет прямой пары WETH/token_in
+
+    w3 = FakeW3(FakeEth(block_number=100, contracts={
+        target_pool.lower(): target, ref_pool.lower(): ref, router_address.lower(): router,
+    }))
+
+    simulator = TwoPoolArbSimulator(
+        w3, target_router=router_address,
+        reference_pools={target_pool.lower(): {"pool": ref_pool, "router": "0xRefRouter"}},
+        weth_address=weth,
+    )
+    swap = PendingSwap(tx_hash="0xabc", pool_address=target_pool, token_in=token_in, token_out=token_out, amount_in=10 * scale)
+
+    sim = asyncio.run(simulator.simulate(swap))
+
+    assert not sim.profitable
+    assert "сконвертировать" in sim.reason
+
+
 if __name__ == "__main__":
     test_simulator_buys_in_reference_sells_in_target()
     test_simulator_rejects_thin_reference_pool()
     test_simulator_no_opportunity_when_pools_already_balanced()
+    test_simulator_converts_gas_and_cap_for_non_weth_token_in()
+    test_simulator_rejects_when_conversion_has_no_direct_pair()
     print("ok")

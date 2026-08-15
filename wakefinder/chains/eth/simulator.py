@@ -14,7 +14,7 @@
 
 from web3 import AsyncWeb3
 
-from wakefinder.chains.eth.abi import PAIR_ABI
+from wakefinder.chains.eth.abi import PAIR_ABI, ROUTER_ABI
 from wakefinder.common.amm import apply_swap, optimal_arb
 from wakefinder.common.config import get_settings
 from wakefinder.common.interfaces import PendingSwap, SimResult, Simulator
@@ -23,12 +23,29 @@ GAS_LIMIT = 200_000  # должно совпадать с реальным ли�
 
 
 class TwoPoolArbSimulator(Simulator):
-    def __init__(self, w3: AsyncWeb3, target_router: str, reference_pools: dict[str, dict[str, str]]):
+    def __init__(self, w3: AsyncWeb3, target_router: str, reference_pools: dict[str, dict[str, str]], weth_address: str):
         """reference_pools: {адрес_целевого_пула: {"pool": адрес_референсного_пула, "router": адрес_референсного_роутера}}"""
         self.w3 = w3
         self.target_router = target_router
         self.reference_pools = {k.lower(): v for k, v in reference_pools.items()}
+        self.weth_address = weth_address
         self._token0_cache: dict[str, str] = {}
+
+    async def _eth_wei_to_token_in(self, token_in: str, eth_wei: int) -> int | None:
+        """Конвертирует сумму в ETH wei (газ, кэп по капиталу) в эквивалент
+        в единицах token_in через getAmountsOut на целевом роутере. Когда
+        token_in уже WETH — просто возвращает как есть, без RPC-вызова (сохраняет
+        текущее поведение/задержку для доминирующего случая). None означает
+        "не удалось оценить" (нет прямой пары WETH/token_in на роутере) —
+        вызывающий код должен трактовать это как "не торгуем", не как ноль."""
+        if token_in.lower() == self.weth_address.lower():
+            return eth_wei
+        router = self.w3.eth.contract(address=self.target_router, abi=ROUTER_ABI)
+        try:
+            amounts = await router.functions.getAmountsOut(eth_wei, [self.weth_address, token_in]).call()
+            return amounts[-1]
+        except Exception:
+            return None
 
     async def _token0(self, pool_address: str) -> str:
         cached = self._token0_cache.get(pool_address.lower())
@@ -69,28 +86,31 @@ class TwoPoolArbSimulator(Simulator):
         if ref_reserve_in < settings.min_reference_liquidity_eth * 10**18:
             return SimResult(profitable=False, expected_profit_wei=0, reason="референсный пул слишком тонкий — риск манипуляции ценой")
 
-        # Кэп по капиталу применяем здесь (не постфактум в сборщике транзакций),
-        # чтобы sim.amount_in/expected_profit_wei оставались согласованы со
-        # сделкой, которую реально соберём и подпишем — кэп задним числом
-        # незаметно обесценил бы цифру прибыли, так как прибыль от арбитража
-        # не линейна по amount_in.
-        #
-        # ponytail: предполагается, что token_in — 18-decimal токен (например,
-        # WETH) — кэп задан в сырых wei. Отклоняйте token_in, отличный от WETH,
-        # на стороне вызывающего кода, пока это не учитывает decimals как надо.
-        wei_cap = int(settings.max_capital_per_bundle_eth * 10**18)
-        upper_bound = min(wei_cap, ref_reserve_in, new_target_out)
+        # Кэп по капиталу и газ считаются в реальных ETH wei, затем конвертируются
+        # в единицы token_in — раньше оба использовались как есть в предположении
+        # token_in==WETH, что для любого другого token_in либо давало бессмысленный
+        # кэп, либо (для газа) газ-стоимость в чужих единицах гарантированно топила
+        # любую реальную прибыль. Быстрый путь без RPC-вызова сохранён для
+        # доминирующего случая token_in==WETH — см. _eth_wei_to_token_in().
+        capital_cap_eth_wei = int(settings.max_capital_per_bundle_eth * 10**18)
+        gas_cost_eth_wei = 2 * GAS_LIMIT * int(settings.max_gas_gwei * 10**9)
 
-        # Газ на две ноги, в единицах token_in, в предположении что token_in — WETH
-        # (см. заметку про wei_cap выше — то же допущение, чинить нужно вместе).
-        gas_cost_wei = 2 * GAS_LIMIT * int(settings.max_gas_gwei * 10**9)
+        capital_cap_in_token_in = await self._eth_wei_to_token_in(swap.token_in, capital_cap_eth_wei)
+        gas_cost_in_token_in = await self._eth_wei_to_token_in(swap.token_in, gas_cost_eth_wei)
+        if capital_cap_in_token_in is None or gas_cost_in_token_in is None:
+            return SimResult(
+                profitable=False, expected_profit_wei=0,
+                reason="не удалось сконвертировать ETH-стоимость газа/кэпа в token_in — нет прямой пары с WETH на роутере",
+            )
+
+        upper_bound = min(capital_cap_in_token_in, ref_reserve_in, new_target_out)
 
         amount_in, profit = optimal_arb(
             buy_reserve_in=ref_reserve_in,
             buy_reserve_out=ref_reserve_out,
             sell_reserve_out=new_target_out,
             sell_reserve_in=new_target_in,
-            gas_cost_wei=gas_cost_wei,
+            gas_cost_wei=gas_cost_in_token_in,
             upper_bound=upper_bound,
         )
         if profit <= 0 or amount_in <= 0:
