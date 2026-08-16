@@ -56,12 +56,14 @@ class CanaryController:
             "max_capital_per_bundle_eth": settings.max_capital_per_bundle_eth,
             "max_capital_per_bundle_sol": settings.max_capital_per_bundle_sol,
             "copytrade_size_pct": settings.copytrade_size_pct,
+            "snipe_size_pct": settings.snipe_size_pct,
         }
 
     def update(self, trade_log_path: str, chain: str) -> float:
         fraction = compute_canary_fraction(trade_log_path, chain, self.start_fraction, self.ramp_trades)
         if chain == "eth":
             self.settings.max_capital_per_bundle_eth = self._original["max_capital_per_bundle_eth"] * fraction
+            self.settings.snipe_size_pct = self._original["snipe_size_pct"] * fraction
         elif chain == "solana":
             self.settings.max_capital_per_bundle_sol = self._original["max_capital_per_bundle_sol"] * fraction
         self.settings.copytrade_size_pct = self._original["copytrade_size_pct"] * fraction

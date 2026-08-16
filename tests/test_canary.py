@@ -40,7 +40,7 @@ def test_fraction_caps_at_full_size(tmp_path):
 
 def test_controller_scales_from_original_not_from_current(tmp_path):
     path = tmp_path / "trades.jsonl"
-    settings = SimpleNamespace(max_capital_per_bundle_eth=1.0, max_capital_per_bundle_sol=5.0, copytrade_size_pct=2.0)
+    settings = SimpleNamespace(max_capital_per_bundle_eth=1.0, max_capital_per_bundle_sol=5.0, copytrade_size_pct=2.0, snipe_size_pct=1.0)
     controller = CanaryController(settings, start_fraction=0.0, ramp_trades=10)
 
     _write_log(path, [{"chain": "eth", "included": True}] * 5)

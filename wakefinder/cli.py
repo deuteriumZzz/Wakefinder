@@ -24,7 +24,7 @@ import tomllib
 logger = logging.getLogger("wakefinder.cli")
 
 CHAINS = ("eth", "solana")
-STRATEGIES = ("arb", "copytrade")
+STRATEGIES = ("arb", "copytrade", "snipe")  # snipe пока реализован только для chain="eth", см. load_profile()
 
 # ключи TOML [risk] -> переменные окружения Settings (common/config.py)
 _RISK_ENV_MAP = {
@@ -45,6 +45,14 @@ _RISK_ENV_MAP = {
     "max_drawdown_sol": "MAX_DRAWDOWN_SOL",
     "drawdown_window_seconds": "DRAWDOWN_WINDOW_SECONDS",
     "drawdown_check_interval_seconds": "DRAWDOWN_CHECK_INTERVAL_SECONDS",
+    "snipe_size_pct": "SNIPE_SIZE_PCT",
+    "snipe_test_amount_eth": "SNIPE_TEST_AMOUNT_ETH",
+    "snipe_min_liquidity_weth": "SNIPE_MIN_LIQUIDITY_WETH",
+    "snipe_trailing_stop_pct": "SNIPE_TRAILING_STOP_PCT",
+    "snipe_trailing_stop_check_interval_seconds": "SNIPE_TRAILING_STOP_CHECK_INTERVAL_SECONDS",
+    "snipe_max_concurrent_positions": "SNIPE_MAX_CONCURRENT_POSITIONS",
+    "canary_start_fraction": "CANARY_START_FRACTION",
+    "canary_ramp_trades": "CANARY_RAMP_TRADES",
 }
 
 
@@ -55,6 +63,8 @@ def load_profile(path: str) -> dict:
         raise ValueError(f"профиль {path}: chain должен быть одним из {CHAINS}")
     if profile.get("strategy") not in STRATEGIES:
         raise ValueError(f"профиль {path}: strategy должен быть одним из {STRATEGIES}")
+    if profile["strategy"] == "snipe" and profile["chain"] != "eth":
+        raise ValueError(f"профиль {path}: strategy 'snipe' пока реализован только для chain='eth'")
     return profile
 
 
@@ -189,6 +199,9 @@ async def run_profile(path: str) -> None:
     elif chain == "solana" and strategy == "copytrade":
         from wakefinder.chains.solana.copytrade import run as solana_copytrade_run
         await solana_copytrade_run(watched_wallets=watched_wallets, token_allowlist=token_allowlist, token_denylist=token_denylist)
+    elif chain == "eth" and strategy == "snipe":
+        from wakefinder.chains.eth.snipe import run as eth_snipe_run
+        await eth_snipe_run(factory_address=profile.get("factory_address"), token_denylist=token_denylist)
 
 
 def main() -> None:

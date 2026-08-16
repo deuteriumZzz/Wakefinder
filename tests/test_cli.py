@@ -32,8 +32,20 @@ def test_load_profile_rejects_unknown_chain(tmp_path):
 
 
 def test_load_profile_rejects_unknown_strategy(tmp_path):
-    path = _write_toml(tmp_path / "p.toml", 'chain = "eth"\nstrategy = "snipe"\n')
+    path = _write_toml(tmp_path / "p.toml", 'chain = "eth"\nstrategy = "defi_options"\n')
     with pytest.raises(ValueError, match="strategy"):
+        load_profile(path)
+
+
+def test_load_profile_accepts_snipe_on_eth(tmp_path):
+    path = _write_toml(tmp_path / "p.toml", 'chain = "eth"\nstrategy = "snipe"\n')
+    profile = load_profile(path)
+    assert profile["strategy"] == "snipe"
+
+
+def test_load_profile_rejects_snipe_on_solana(tmp_path):
+    path = _write_toml(tmp_path / "p.toml", 'chain = "solana"\nstrategy = "snipe"\n')
+    with pytest.raises(ValueError, match="snipe"):
         load_profile(path)
 
 

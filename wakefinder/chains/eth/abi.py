@@ -38,6 +38,18 @@ ROUTER_ABI = [
         "outputs": [{"name": "amounts", "type": "uint256[]"}],
         "stateMutability": "view",
     },
+    {
+        "name": "swapExactTokensForETH",
+        "type": "function",
+        "inputs": [
+            {"name": "amountIn", "type": "uint256"},
+            {"name": "amountOutMin", "type": "uint256"},
+            {"name": "path", "type": "address[]"},
+            {"name": "to", "type": "address"},
+            {"name": "deadline", "type": "uint256"},
+        ],
+        "outputs": [{"name": "amounts", "type": "uint256[]"}],
+    },
 ]
 
 ERC20_ABI = [
@@ -48,6 +60,12 @@ ERC20_ABI = [
         "outputs": [{"name": "", "type": "uint256"}],
         "stateMutability": "view",
     },
+    {
+        "name": "approve",
+        "type": "function",
+        "inputs": [{"name": "spender", "type": "address"}, {"name": "amount", "type": "uint256"}],
+        "outputs": [{"name": "", "type": "bool"}],
+    },
 ]
 
 FACTORY_ABI = [
@@ -57,6 +75,17 @@ FACTORY_ABI = [
         "inputs": [{"name": "tokenA", "type": "address"}, {"name": "tokenB", "type": "address"}],
         "outputs": [{"name": "pair", "type": "address"}],
         "stateMutability": "view",
+    },
+    {
+        "name": "PairCreated",
+        "type": "event",
+        "anonymous": False,
+        "inputs": [
+            {"name": "token0", "type": "address", "indexed": True},
+            {"name": "token1", "type": "address", "indexed": True},
+            {"name": "pair", "type": "address", "indexed": False},
+            {"name": "", "type": "uint256", "indexed": False},
+        ],
     },
 ]
 

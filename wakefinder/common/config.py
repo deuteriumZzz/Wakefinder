@@ -129,6 +129,21 @@ class Settings(BaseSettings):
     # COPYTRADE_SIZE_PCT каждый могут незаметно съесть большую часть баланса.
     copytrade_max_total_exposure_pct: float = Field(default=20.0, gt=0, le=100)
 
+    # Снайпинг новых пар (chains/eth/snipe.py, common/trailing_stop.py,
+    # chains/eth/snipe_filter.py) — принципиально более рискованная стратегия,
+    # чем арбитраж/копитрейдинг: новый токен не имеет истории, большинство
+    # новых пар — rug/dead в первые минуты. Держите SNIPE_SIZE_PCT маленьким
+    # и используйте canary (CANARY_START_FRACTION) на новых профилях.
+    snipe_size_pct: float = Field(default=1.0, gt=0, le=100)
+    # Тестовая сумма ETH для котировки/фильтра — НЕ реальный размер входа,
+    # только для getAmountsOut в snipe_filter.py.
+    snipe_test_amount_eth: float = 0.01
+    snipe_min_liquidity_weth: float = 1.0
+    snipe_trailing_stop_pct: float = Field(default=30.0, gt=0, le=100)
+    snipe_trailing_stop_check_interval_seconds: float = 15
+    snipe_max_concurrent_positions: int = Field(default=3, ge=1)
+    snipe_positions_file: str = "positions_snipe.json"
+
     # Telegram-алерты на критичные события (kill switch, стоп-лосс, серия
     # неудач). Пустые значения = алерты выключены, не обязательны.
     telegram_bot_token: SecretStr = SecretStr("")

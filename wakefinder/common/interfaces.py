@@ -16,6 +16,20 @@ class PendingSwap:
 
 
 @dataclass
+class NewPool:
+    """Только что созданная пара на DEX (Factory PairCreated) — снайпинг
+    реагирует на САМ ФАКТ появления пула, а не на своп внутри него, поэтому
+    не переиспользует PendingSwap (нет token_in/token_out/amount_in до
+    первого реального свопа)."""
+
+    tx_hash: str
+    pool_address: str
+    token0: str
+    token1: str
+    block_number: int
+
+
+@dataclass
 class SimResult:
     """Результат симуляции стратегии по конкретному pending-свопу.
 
