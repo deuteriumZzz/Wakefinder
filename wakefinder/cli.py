@@ -67,6 +67,17 @@ def apply_risk_overrides(profile: dict) -> None:
         logger.info("risk override из профиля: %s=%s", env_name, value)
 
 
+def apply_kill_switch_override(profile: dict) -> None:
+    """Опционально: свой kill switch на ЭТОТ профиль, отдельно от общего
+    аварийного (единый на все 4 процесса по умолчанию, см. common/killswitch.py).
+    Если не задано в профиле — поведение как раньше (общий стоп для всех).
+    Позволяет выключить именно сегодняшнюю стратегию, не трогая остальные:
+    `python -m wakefinder.common.killswitch stop --path <тот же путь>`."""
+    if "kill_switch_file" in profile:
+        os.environ["KILL_SWITCH_FILE"] = profile["kill_switch_file"]
+        logger.info("профильный kill switch: %s", profile["kill_switch_file"])
+
+
 def _pool_registry_from_profile(profile: dict) -> dict[tuple[str, str], str]:
     """[[pools]] с полями token_in/token_out/pool -> {(token_in, token_out): pool}
     (формат, который ожидает chains/eth/main.py:run())."""
@@ -96,9 +107,56 @@ def _solana_pools_from_profile(profile: dict) -> dict[str, dict[str, str]]:
     return result
 
 
+async def run_discover(args) -> None:
+    """Обёртка над wakefinder/wallet_scanner.py в виде команды: сканирует
+    указанные пулы/vault'ы, печатает ранжированных кандидатов и готовый
+    TOML-фрагмент для watched_wallets. Не пишет в файл профиля автоматически
+    (TOML нет стандартного writer'а в stdlib, а сторонний ради этого — лишняя
+    зависимость; ручной copy-paste безопаснее тихой перезаписи чужого файла)."""
+    from wakefinder.common.config import get_settings
+
+    settings = get_settings()
+
+    if args.chain == "eth":
+        from web3 import AsyncHTTPProvider, AsyncWeb3
+
+        from wakefinder.wallet_scanner import filter_by_etherscan_activity, find_candidate_wallets_eth
+
+        w3 = AsyncWeb3(AsyncHTTPProvider(settings.eth_rpc_http_url.get_secret_value()))
+        counts = await find_candidate_wallets_eth(w3, args.pools, args.from_block, args.to_block)
+        ranked = counts.most_common()
+        if args.etherscan_api_key:
+            survivors = set(filter_by_etherscan_activity([a for a, _ in ranked], args.etherscan_api_key))
+            ranked = [(a, c) for a, c in ranked if a in survivors]
+    else:
+        from solana.rpc.async_api import AsyncClient
+
+        from wakefinder.wallet_scanner import find_candidate_wallets_solana
+
+        client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
+        counts = await find_candidate_wallets_solana(client, args.pools, limit=args.limit)
+        ranked = counts.most_common()
+
+    ranked = ranked[: args.top]
+    if not ranked:
+        print("Кандидатов не найдено — проверьте адреса пулов/диапазон блоков.")
+        return
+
+    print(f"Найдено кандидатов: {len(ranked)} (по частоте торговли в указанных пулах)\n")
+    for address, count in ranked:
+        print(f"  {address}  сделок={count}")
+
+    print("\nВставьте нужные в watched_wallets вашего профиля:")
+    print("watched_wallets = [")
+    for address, _ in ranked:
+        print(f'    "{address}",')
+    print("]")
+
+
 async def run_profile(path: str) -> None:
     profile = load_profile(path)
     apply_risk_overrides(profile)
+    apply_kill_switch_override(profile)
 
     chain = profile["chain"]
     strategy = profile["strategy"]
@@ -136,13 +194,29 @@ async def run_profile(path: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="wakefinder", description="Wakefinder — единый CLI поверх конфиг-профилей")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
     run_parser = subparsers.add_parser("run", help="запустить процесс по TOML-профилю")
     run_parser.add_argument("profile", help="путь к .toml-профилю (см. configs/)")
+
+    discover_parser = subparsers.add_parser("discover", help="найти кандидатов в watched_wallets по активности в указанных пулах")
+    discover_parser.add_argument("--chain", choices=CHAINS, required=True)
+    discover_parser.add_argument("--pools", nargs="+", required=True, help="ETH: адреса пулов; Solana: адреса vault-аккаунтов")
+    discover_parser.add_argument("--from-block", type=int, help="ETH: начало диапазона блоков")
+    discover_parser.add_argument("--to-block", type=int, help="ETH: конец диапазона блоков")
+    discover_parser.add_argument("--limit", type=int, default=1000, help="Solana: сколько последних подписей на vault сканировать")
+    discover_parser.add_argument("--top", type=int, default=20, help="сколько кандидатов показать")
+    discover_parser.add_argument("--etherscan-api-key", default="", help="опциональный фильтр по активности кошелька (ETH)")
+
     args = parser.parse_args()
 
     if args.command == "run":
         logging.basicConfig(level=logging.INFO)
         asyncio.run(run_profile(args.profile))
+    elif args.command == "discover":
+        logging.basicConfig(level=logging.WARNING)  # не засорять вывод служебными INFO-логами
+        if args.chain == "eth" and (args.from_block is None or args.to_block is None):
+            parser.error("discover --chain eth требует --from-block и --to-block")
+        asyncio.run(run_discover(args))
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from wakefinder.cli import (
     _pool_registry_from_profile,
     _reference_pools_from_profile,
     _solana_pools_from_profile,
+    apply_kill_switch_override,
     apply_risk_overrides,
     load_profile,
 )
@@ -49,6 +50,18 @@ def test_apply_risk_overrides_rejects_unknown_key():
 
 def test_apply_risk_overrides_empty_profile_is_noop():
     apply_risk_overrides({})  # не должно бросать
+
+
+def test_apply_kill_switch_override_sets_env(monkeypatch):
+    monkeypatch.delenv("KILL_SWITCH_FILE", raising=False)
+    apply_kill_switch_override({"kill_switch_file": "/tmp/my-profile.kill"})
+    assert os.environ["KILL_SWITCH_FILE"] == "/tmp/my-profile.kill"
+
+
+def test_apply_kill_switch_override_absent_is_noop(monkeypatch):
+    monkeypatch.delenv("KILL_SWITCH_FILE", raising=False)
+    apply_kill_switch_override({})
+    assert "KILL_SWITCH_FILE" not in os.environ
 
 
 def test_pool_registry_from_profile():
