@@ -15,8 +15,8 @@ class _SwapEvents:
     def __init__(self, logs):
         self._logs = logs
 
-    async def get_logs(self, from_block, to_block):
-        return [log for log in self._logs if from_block <= log["blockNumber"] <= to_block]
+    async def get_logs(self, fromBlock, toBlock):  # имена как в реальном web3.py AsyncContractEvent.get_logs
+        return [log for log in self._logs if fromBlock <= log["blockNumber"] <= toBlock]
 
 
 class _Events:

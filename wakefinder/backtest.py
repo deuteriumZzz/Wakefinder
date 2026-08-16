@@ -64,7 +64,7 @@ async def run_backtest(
         block = from_block
         while block <= to_block:
             chunk_end = min(block + chunk_size - 1, to_block)
-            logs = await pool.events.Swap.get_logs(from_block=block, to_block=chunk_end)
+            logs = await pool.events.Swap.get_logs(fromBlock=block, toBlock=chunk_end)
             for log in logs:
                 scanned += 1
                 amount0_in = log["args"]["amount0In"]

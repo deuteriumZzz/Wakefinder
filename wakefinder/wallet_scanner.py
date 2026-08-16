@@ -58,7 +58,7 @@ async def find_candidate_wallets_eth(
         block = from_block
         while block <= to_block:
             chunk_end = min(block + chunk_size - 1, to_block)
-            logs = await pool.events.Swap.get_logs(from_block=block, to_block=chunk_end)
+            logs = await pool.events.Swap.get_logs(fromBlock=block, toBlock=chunk_end)
             for log in logs:
                 counts[log["args"]["to"].lower()] += 1
             block = chunk_end + 1
