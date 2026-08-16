@@ -165,6 +165,11 @@ class Settings(BaseSettings):
     live_config_file: str = "live_config.json"
     live_config_check_interval_seconds: float = 10
 
+    # История цены открытых позиций (common/price_history.py, для графиков
+    # на дашборде) — пишется как побочный эффект уже выполняемых RPC-запросов
+    # на /api/state, не отдельный источник нагрузки.
+    price_history_file: str = "price_history.jsonl"
+
     # Портфельный circuit breaker по РЕАЛИЗОВАННОЙ просадке за скользящее
     # окно, агрегированной по всем стратегиям одной сети (arb + copytrade
     # вместе) — независим от MAX_CONSECUTIVE_FAILURES, который ловит только

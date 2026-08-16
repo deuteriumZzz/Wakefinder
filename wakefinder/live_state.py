@@ -22,6 +22,7 @@ from wakefinder.chains.eth.abi import ROUTER_ABI
 from wakefinder.common import heartbeat, killswitch
 from wakefinder.common.metrics import compute_chain_metrics
 from wakefinder.common.price_feed import fetch_usd_prices
+from wakefinder.common.price_history import log_snapshot
 from wakefinder.common.wallet_stats import compute_wallet_stats
 
 HEARTBEAT_STALE_SECONDS = 90
@@ -60,7 +61,7 @@ def _positions_without_live_value(raw: dict, decimals: int, wei_field: str = "en
     return out
 
 
-async def eth_copytrade_positions_live(w3: AsyncWeb3, router_address: str, positions: dict, decimals: int = 10**18) -> list[dict]:
+async def eth_copytrade_positions_live(w3: AsyncWeb3, router_address: str, positions: dict, decimals: int = 10**18, history_path: str | None = None) -> list[dict]:
     router = w3.eth.contract(address=router_address, abi=ROUTER_ABI)
     out = []
     for token, pos in positions.items():
@@ -74,14 +75,17 @@ async def eth_copytrade_positions_live(w3: AsyncWeb3, router_address: str, posit
                 current = quote[-1]
             except Exception:
                 pass  # ликвидность высохла/rug — не можем оценить, показываем как "нет данных", не нулём
+        current_scaled = current / decimals if current is not None else None
+        if history_path and current_scaled is not None:
+            log_snapshot(history_path, token, current_scaled)
         out.append({
-            "token": token, "entry_amount_in": entry / decimals, "current_value": current / decimals if current is not None else None,
+            "token": token, "entry_amount_in": entry / decimals, "current_value": current_scaled,
             "pnl_pct": _pnl_pct(entry, current), "watched_wallet": pos.get("watched_wallet", ""),
         })
     return out
 
 
-async def eth_snipe_positions_live(w3: AsyncWeb3, router_address: str, weth_address: str, positions: dict, decimals: int = 10**18) -> list[dict]:
+async def eth_snipe_positions_live(w3: AsyncWeb3, router_address: str, weth_address: str, positions: dict, decimals: int = 10**18, history_path: str | None = None) -> list[dict]:
     router = w3.eth.contract(address=router_address, abi=ROUTER_ABI)
     out = []
     for token, pos in positions.items():
@@ -94,14 +98,17 @@ async def eth_snipe_positions_live(w3: AsyncWeb3, router_address: str, weth_addr
                 current = quote[-1]
             except Exception:
                 pass
+        current_scaled = current / decimals if current is not None else None
+        if history_path and current_scaled is not None:
+            log_snapshot(history_path, token, current_scaled)
         out.append({
-            "token": token, "entry_amount_in": entry / decimals, "current_value": current / decimals if current is not None else None,
+            "token": token, "entry_amount_in": entry / decimals, "current_value": current_scaled,
             "pnl_pct": _pnl_pct(entry, current),
         })
     return out
 
 
-async def solana_copytrade_positions_live(jupiter, positions: dict, decimals: int = 10**9) -> list[dict]:
+async def solana_copytrade_positions_live(jupiter, positions: dict, decimals: int = 10**9, history_path: str | None = None) -> list[dict]:
     out = []
     for token, pos in positions.items():
         entry = pos.get("entry_amount_in", 0)
@@ -114,8 +121,11 @@ async def solana_copytrade_positions_live(jupiter, positions: dict, decimals: in
                 current = int(quote["outAmount"])
             except Exception:
                 pass
+        current_scaled = current / decimals if current is not None else None
+        if history_path and current_scaled is not None:
+            log_snapshot(history_path, token, current_scaled)
         out.append({
-            "token": token, "entry_amount_in": entry / decimals, "current_value": current / decimals if current is not None else None,
+            "token": token, "entry_amount_in": entry / decimals, "current_value": current_scaled,
             "pnl_pct": _pnl_pct(entry, current), "watched_wallet": pos.get("watched_wallet", ""),
         })
     return out
@@ -191,7 +201,7 @@ async def gather_state(settings) -> dict:
 
     try:
         eth_copytrade_positions = (
-            await eth_copytrade_positions_live(w3, settings.eth_router_address, eth_copytrade_raw) if w3 is not None
+            await eth_copytrade_positions_live(w3, settings.eth_router_address, eth_copytrade_raw, history_path=settings.price_history_file) if w3 is not None
             else _positions_without_live_value(eth_copytrade_raw, 10**18, extra_fields=("watched_wallet",))
         )
     except Exception:
@@ -199,7 +209,7 @@ async def gather_state(settings) -> dict:
 
     try:
         eth_snipe_positions = (
-            await eth_snipe_positions_live(w3, settings.eth_router_address, settings.eth_weth_address, eth_snipe_raw) if w3 is not None
+            await eth_snipe_positions_live(w3, settings.eth_router_address, settings.eth_weth_address, eth_snipe_raw, history_path=settings.price_history_file) if w3 is not None
             else _positions_without_live_value(eth_snipe_raw, 10**18, wei_field="entry_amount_in_wei")
         )
     except Exception:
@@ -225,7 +235,7 @@ async def gather_state(settings) -> dict:
             client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
             sol_balance = (await client.get_balance(keypair.pubkey())).value / 10**9
             jupiter = Jupiter(client, keypair)
-            sol_copytrade_positions = await solana_copytrade_positions_live(jupiter, sol_copytrade_raw)
+            sol_copytrade_positions = await solana_copytrade_positions_live(jupiter, sol_copytrade_raw, history_path=settings.price_history_file)
         except Exception as exc:
             state["solana_error"] = f"{type(exc).__name__}: не удалось получить живые Solana-данные"
             sol_copytrade_positions = _positions_without_live_value(sol_copytrade_raw, 10**9, extra_fields=("watched_wallet",))

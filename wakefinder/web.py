@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from wakefinder.common import killswitch
 from wakefinder.common.config import get_settings
+from wakefinder.common.price_history import read_history
 from wakefinder.live_config import load_live_config, save_live_config
 from wakefinder.live_state import gather_state
 from wakefinder.telegram_auth import verify_init_data
@@ -84,6 +85,15 @@ class LiveConfigPayload(BaseModel):
     token_allowlist: list[str] = []
     token_denylist: list[str] = []
     risk: dict[str, float] = {}
+
+
+@app.get("/api/price_history", dependencies=[Depends(_check_auth)])
+async def api_price_history(token: str) -> list[dict]:
+    """Точки накапливаются как побочный эффект /api/state (см. docstring
+    price_history.py) — история есть только за то время, что дашборд был
+    открыт и опрашивал состояние, не архивная реконструкция."""
+    settings = get_settings()
+    return read_history(settings.price_history_file, token)
 
 
 @app.get("/api/config", dependencies=[Depends(_check_auth)])
@@ -178,6 +188,7 @@ _PAGE = """
 <head>
   <title>Wakefinder dashboard</title>
   <meta charset="utf-8">
+  <script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
   <style>
     :root {
       --bg: #0b0f0e; --panel: #111715; --border: #1f2b27; --text: #d7e5df; --muted: #6f8a80;
@@ -212,6 +223,10 @@ _PAGE = """
     <div class="card"><div class="label">ETH баланс</div><div class="value" id="eth-balance">…</div><div class="muted" id="eth-address"></div></div>
     <div class="card"><div class="label">SOL баланс</div><div class="value" id="sol-balance">…</div><div class="muted" id="sol-address"></div></div>
   </div>
+
+  <h3 id="chart-title">График позиции — кликните по токену в любой таблице ниже</h3>
+  <div class="card muted" id="chart-placeholder">Нет выбранного токена</div>
+  <div id="chart-container" style="height:260px; display:none;"></div>
 
   <h3>ETH copytrade — открытые позиции</h3>
   <table id="eth-copytrade-table"><thead><tr><th>Токен</th><th>Вход</th><th>Сейчас</th><th>PnL</th><th>Кошелёк</th></tr></thead><tbody></tbody></table>
@@ -262,9 +277,40 @@ function renderPositions(tbodyId, rows, withWallet) {
     return;
   }
   tbody.innerHTML = rows.map(p => `
-    <tr><td>${short(p.token)}</td><td>${num(p.entry_amount_in)}</td><td>${num(p.current_value)}</td>
+    <tr><td><a href="#" class="token-link" style="color:var(--accent); cursor:pointer;" data-token="${esc(p.token)}">${short(p.token)}</a></td>
+    <td>${num(p.entry_amount_in)}</td><td>${num(p.current_value)}</td>
     <td>${pnlCell(p.pnl_pct)}</td>${withWallet ? `<td>${short(p.watched_wallet)}</td>` : ""}</tr>
   `).join("");
+  tbody.querySelectorAll(".token-link").forEach(el => el.addEventListener("click", (e) => {
+    e.preventDefault();
+    selectChartToken(el.dataset.token);
+  }));
+}
+
+let chart = null;
+let chartSeries = null;
+
+async function selectChartToken(token) {
+  document.getElementById("chart-title").textContent = `График позиции — ${short(token)}`;
+  const resp = await fetch(`/api/price_history?token=${encodeURIComponent(token)}`);
+  const points = resp.ok ? await resp.json() : [];
+  document.getElementById("chart-placeholder").style.display = points.length ? "none" : "block";
+  document.getElementById("chart-container").style.display = points.length ? "block" : "none";
+  if (!points.length) {
+    document.getElementById("chart-placeholder").textContent = "Пока нет накопленной истории для этого токена — точки копятся, пока открыт дашборд.";
+    return;
+  }
+  if (!chart) {
+    chart = LightweightCharts.createChart(document.getElementById("chart-container"), {
+      layout: { background: { color: "#111715" }, textColor: "#d7e5df" },
+      grid: { vertLines: { color: "#1f2b27" }, horzLines: { color: "#1f2b27" } },
+      timeScale: { timeVisible: true },
+      height: 260,
+    });
+    chartSeries = chart.addLineSeries({ color: "#35d68a" });
+  }
+  chartSeries.setData(points.map(p => ({ time: Math.floor(p.ts), value: p.value })));
+  chart.timeScale().fitContent();
 }
 
 async function refresh() {
