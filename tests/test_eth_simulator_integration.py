@@ -80,6 +80,20 @@ class FakeRouter:
         self.functions = _RouterFunctions(converter)
 
 
+class _FactoryFunctions:
+    def __init__(self, pair_address: str):
+        self._pair_address = pair_address
+
+    def getPair(self, token_a, token_b):
+        return _Callable(self._pair_address)
+
+
+class FakeFactory:
+    def __init__(self, address: str, pair_address: str):
+        self.address = address
+        self.functions = _FactoryFunctions(pair_address)
+
+
 class FakeEth:
     def __init__(self, block_number: int, contracts: dict[str, FakeContract]):
         self.block_number = _Awaitable(block_number)
@@ -242,10 +256,76 @@ def test_simulator_rejects_when_conversion_has_no_direct_pair():
     assert "сконвертировать" in sim.reason
 
 
+def test_simulator_picks_best_among_auto_discovered_reference_pools():
+    weth = "0xWETH"
+    token_in = weth
+    token_out = "0xOUT"
+    target_pool = "0xTARGET"
+    configured_ref_pool = "0xREF1"
+    discovered_ref_pool = "0xREF2"
+    factory_address = "0xFACTORY"
+    discovered_router = "0xDiscoveredRouter"
+
+    scale = 10**18
+    target = FakeContract(target_pool, reserve0=1_000 * scale, reserve1=800 * scale, token0=token_in)
+    configured_ref = FakeContract(configured_ref_pool, reserve0=1_000 * scale, reserve1=1_000 * scale, token0=token_in)
+    # более выгодная пропорция -> должна дать БОЛЬШУЮ прибыль и быть выбрана вместо предзаданной
+    discovered_ref = FakeContract(discovered_ref_pool, reserve0=1_000 * scale, reserve1=1_300 * scale, token0=token_in)
+    factory = FakeFactory(factory_address, discovered_ref_pool)
+
+    w3 = FakeW3(FakeEth(block_number=100, contracts={
+        target_pool.lower(): target,
+        configured_ref_pool.lower(): configured_ref,
+        discovered_ref_pool.lower(): discovered_ref,
+        factory_address.lower(): factory,
+    }))
+
+    simulator = TwoPoolArbSimulator(
+        w3, target_router="0xTargetRouter",
+        reference_pools={target_pool.lower(): {"pool": configured_ref_pool, "router": "0xConfiguredRouter"}},
+        weth_address=weth,
+        auto_discover_factories={"other_dex": (factory_address, discovered_router)},
+    )
+    swap = PendingSwap(tx_hash="0xabc", pool_address=target_pool, token_in=token_in, token_out=token_out, amount_in=10 * scale)
+
+    sim = asyncio.run(simulator.simulate(swap))
+
+    assert sim.profitable
+    assert sim.buy_router == discovered_router
+
+
+def test_simulator_without_auto_discover_uses_only_configured_pool():
+    weth = "0xWETH"
+    token_in = weth
+    token_out = "0xOUT"
+    target_pool = "0xTARGET"
+    configured_ref_pool = "0xREF1"
+
+    scale = 10**18
+    target = FakeContract(target_pool, reserve0=1_000 * scale, reserve1=800 * scale, token0=token_in)
+    configured_ref = FakeContract(configured_ref_pool, reserve0=1_000 * scale, reserve1=1_000 * scale, token0=token_in)
+
+    w3 = FakeW3(FakeEth(block_number=100, contracts={target_pool.lower(): target, configured_ref_pool.lower(): configured_ref}))
+
+    simulator = TwoPoolArbSimulator(
+        w3, target_router="0xTargetRouter",
+        reference_pools={target_pool.lower(): {"pool": configured_ref_pool, "router": "0xConfiguredRouter"}},
+        weth_address=weth,
+    )  # auto_discover_factories не задан — дефолт, поведение как раньше
+    swap = PendingSwap(tx_hash="0xabc", pool_address=target_pool, token_in=token_in, token_out=token_out, amount_in=10 * scale)
+
+    sim = asyncio.run(simulator.simulate(swap))
+
+    assert sim.profitable
+    assert sim.buy_router == "0xConfiguredRouter"
+
+
 if __name__ == "__main__":
     test_simulator_buys_in_reference_sells_in_target()
     test_simulator_rejects_thin_reference_pool()
     test_simulator_no_opportunity_when_pools_already_balanced()
     test_simulator_converts_gas_and_cap_for_non_weth_token_in()
     test_simulator_rejects_when_conversion_has_no_direct_pair()
+    test_simulator_picks_best_among_auto_discovered_reference_pools()
+    test_simulator_without_auto_discover_uses_only_configured_pool()
     print("ok")

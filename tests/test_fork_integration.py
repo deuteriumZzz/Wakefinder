@@ -24,7 +24,7 @@ import pytest
 from web3 import AsyncHTTPProvider, AsyncWeb3
 
 from wakefinder.chains.eth.abi import PAIR_ABI
-from wakefinder.chains.eth.simulator import TwoPoolArbSimulator
+from wakefinder.chains.eth.simulator import KNOWN_DEX_FACTORIES, TwoPoolArbSimulator
 from wakefinder.common.interfaces import PendingSwap
 
 os.environ.setdefault("ETH_RPC_WS_URL", "wss://example/ws")
@@ -118,6 +118,27 @@ def test_fork_simulator_runs_against_real_contracts_without_error(anvil_rpc):
         )
         sim = await simulator.simulate(swap)
         assert sim is not None  # дошли до конца без исключения — это и есть цель теста
+
+    asyncio.run(_run())
+
+
+def test_fork_auto_discovers_real_sushiswap_pool(anvil_rpc):
+    """Без предзаданного reference_pools вообще — только auto_discover_factories.
+    Подтверждает, что getPair() на РЕАЛЬНОЙ Sushiswap-фабрике находит именно
+    тот пул, который мы независимо проверили через cast call при написании
+    этого файла (SUSHI_WETH_USDC_PAIR), не какой-то другой/нулевой адрес."""
+    async def _run():
+        w3 = AsyncWeb3(AsyncHTTPProvider(anvil_rpc))
+        simulator = TwoPoolArbSimulator(
+            w3, target_router=UNISWAP_ROUTER, reference_pools={},
+            weth_address=WETH, auto_discover_factories=KNOWN_DEX_FACTORIES,
+        )
+        block_number = await w3.eth.block_number
+        discovered = await simulator._discover_pool(
+            KNOWN_DEX_FACTORIES["sushiswap"][0], WETH, USDC, block_number,
+        )
+        assert discovered is not None
+        assert discovered.lower() == SUSHI_WETH_USDC_PAIR.lower()
 
     asyncio.run(_run())
 

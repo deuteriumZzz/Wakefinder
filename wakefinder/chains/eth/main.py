@@ -44,7 +44,7 @@ from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
 from wakefinder.chains.eth.abi import ERC20_ABI, ROUTER_ABI
 from wakefinder.chains.eth.sender import FlashbotsBundleSender
-from wakefinder.chains.eth.simulator import GAS_LIMIT, TwoPoolArbSimulator
+from wakefinder.chains.eth.simulator import GAS_LIMIT, KNOWN_DEX_FACTORIES, TwoPoolArbSimulator
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
 from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
@@ -170,7 +170,10 @@ async def run(
     async with AsyncWeb3.persistent_websocket(provider) as w3:
         chain_id = await w3.eth.chain_id
         watcher = UniswapV2Watcher(w3, settings.eth_router_address, pool_registry, min_amount_in, watched_wallets)
-        simulator = TwoPoolArbSimulator(w3, settings.eth_router_address, reference_pools, settings.eth_weth_address)
+        simulator = TwoPoolArbSimulator(
+            w3, settings.eth_router_address, reference_pools, settings.eth_weth_address,
+            auto_discover_factories=KNOWN_DEX_FACTORIES if settings.eth_auto_discover_reference_pools else None,
+        )
         sender = FlashbotsBundleSender(
             rpc_url=settings.eth_rpc_http_url.get_secret_value(),
             signer_account=fb_signer,
