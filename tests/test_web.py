@@ -1,4 +1,3 @@
-import json
 import os
 
 import pytest
@@ -15,15 +14,28 @@ from fastapi.testclient import TestClient  # noqa: E402
 from wakefinder import web  # noqa: E402
 from wakefinder.common.config import get_settings  # noqa: E402
 
+_FAKE_STATE = {
+    "kill_switch_engaged": False,
+    "heartbeats": [],
+    "metrics": {},
+    "eth": {"address": "0xABC", "balance": 1.5, "copytrade_positions": [], "snipe_positions": []},
+    "solana": {"address": None, "balance": None, "copytrade_positions": []},
+    "wallet_stats": [],
+    "prices": {},
+}
+
+
+async def _fake_gather_state(settings):
+    return dict(_FAKE_STATE)
+
 
 def _client(tmp_path, monkeypatch):
     get_settings.cache_clear()
-    monkeypatch.setenv("TRADE_LOG_FILE", str(tmp_path / "trades.jsonl"))
-    monkeypatch.setenv("COPYTRADE_POSITIONS_FILE", str(tmp_path / "positions.json"))
-    monkeypatch.setenv("SOLANA_COPYTRADE_POSITIONS_FILE", str(tmp_path / "positions_solana.json"))
-    monkeypatch.setenv("HEARTBEAT_DIR", str(tmp_path))
     monkeypatch.setenv("KILL_SWITCH_FILE", str(tmp_path / "kill"))
-    monkeypatch.setattr(web, "fetch_usd_prices", lambda: {})  # без реального сетевого запроса к CoinGecko в тестах
+    # /api/state обычно ходит в реальный RPC через live_state.gather_state — в
+    # тестах веб-слоя (auth/роутинг/передача JSON) это не нужно, реальную
+    # логику валидации позиций/баланса покрывает tests/test_live_state.py.
+    monkeypatch.setattr(web, "gather_state", _fake_gather_state)
     return TestClient(web.app)
 
 
@@ -34,34 +46,21 @@ def test_health():
     assert resp.json() == {"status": "ok"}
 
 
-def test_index_renders_with_no_data(tmp_path, monkeypatch):
+def test_index_serves_html_shell(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     resp = client.get("/")
     assert resp.status_code == 200
     assert "Wakefinder dashboard" in resp.text
-    assert "kill switch не активен" in resp.text
+    assert "/api/state" in resp.text  # JS-поллинг ходит именно сюда
 
 
-def test_index_shows_kill_switch_engaged(tmp_path, monkeypatch):
+def test_api_state_returns_gathered_state(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
-    with open(tmp_path / "kill", "w") as f:
-        f.write("test")
-    resp = client.get("/")
-    assert "KILL SWITCH ВКЛЮЧЁН" in resp.text
-
-
-def test_index_shows_positions_and_metrics(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch)
-
-    with open(tmp_path / "positions.json", "w") as f:
-        json.dump({"0xTOKEN123456789": {"entry_amount_in": 1000, "watched_wallet": "0xWHALE123456789"}}, f)
-
-    with open(tmp_path / "trades.jsonl", "w") as f:
-        f.write(json.dumps({"chain": "eth", "included": True, "expected_profit": 100, "realized_profit": 90}) + "\n")
-
-    resp = client.get("/")
-    assert "0xTOKEN12345" in resp.text  # token[:12], см. _render_positions_table
+    resp = client.get("/api/state")
     assert resp.status_code == 200
+    body = resp.json()
+    assert body["eth"]["balance"] == 1.5
+    assert body["kill_switch_engaged"] is False
 
 
 def test_index_requires_auth_when_configured(tmp_path, monkeypatch):
@@ -69,6 +68,14 @@ def test_index_requires_auth_when_configured(tmp_path, monkeypatch):
     monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")
     client = _client(tmp_path, monkeypatch)
     resp = client.get("/")
+    assert resp.status_code == 401
+
+
+def test_api_state_requires_auth_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_USERNAME", "admin")
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")
+    client = _client(tmp_path, monkeypatch)
+    resp = client.get("/api/state")
     assert resp.status_code == 401
 
 

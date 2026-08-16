@@ -1,0 +1,198 @@
+import asyncio
+import json
+
+import wakefinder.live_state as live_state
+from wakefinder.live_state import (
+    eth_copytrade_positions_live,
+    eth_snipe_positions_live,
+    gather_state,
+    solana_copytrade_positions_live,
+)
+
+TOKEN = "0xTOKEN"
+TOKEN_IN = "0xWETH"
+ROUTER = "0xROUTER"
+
+
+class _Awaitable:
+    def __init__(self, value):
+        self.value = value
+
+    def __await__(self):
+        async def _coro():
+            return self.value
+        return _coro().__await__()
+
+
+class _Callable:
+    def __init__(self, value):
+        self.value = value
+
+    def call(self):
+        return _Awaitable(self.value)
+
+
+class _RaisingCallable:
+    def call(self):
+        raise RuntimeError("нет ликвидности — rug/dead pool")
+
+
+class _RouterFunctions:
+    def __init__(self, sell_out):
+        self._sell_out = sell_out
+
+    def getAmountsOut(self, amount_in, path):
+        if self._sell_out is None:
+            return _RaisingCallable()
+        return _Callable([amount_in, self._sell_out])
+
+
+class FakeW3:
+    def __init__(self, sell_out):
+        self._router = type("R", (), {"functions": _RouterFunctions(sell_out)})()
+
+    @property
+    def eth(self):
+        return self
+
+    def contract(self, address, abi):
+        return self._router
+
+
+class FakeJupiter:
+    def __init__(self, out_amount):
+        self._out_amount = out_amount
+
+    async def quote(self, input_mint, output_mint, amount, slippage_bps, only_direct_routes):
+        if self._out_amount is None:
+            raise RuntimeError("нет маршрута")
+        return {"outAmount": str(self._out_amount)}
+
+
+def test_eth_copytrade_position_live_computes_pnl():
+    positions = {TOKEN: {"entry_amount_in": 10**18, "amount_held": 5 * 10**17, "token_in": TOKEN_IN, "watched_wallet": "0xWHALE"}}
+    w3 = FakeW3(sell_out=15 * 10**17)  # текущая стоимость выше входа -> прибыль
+    result = asyncio.run(eth_copytrade_positions_live(w3, ROUTER, positions))
+    assert len(result) == 1
+    assert result[0]["current_value"] == 1.5
+    assert result[0]["entry_amount_in"] == 1.0
+    assert abs(result[0]["pnl_pct"] - 50.0) < 1e-9
+    assert result[0]["watched_wallet"] == "0xWHALE"
+
+
+def test_eth_copytrade_position_live_handles_dead_pool():
+    positions = {TOKEN: {"entry_amount_in": 10**18, "amount_held": 5 * 10**17, "token_in": TOKEN_IN}}
+    w3 = FakeW3(sell_out=None)  # getAmountsOut ревертит — rug/высохшая ликвидность
+    result = asyncio.run(eth_copytrade_positions_live(w3, ROUTER, positions))
+    assert result[0]["current_value"] is None
+    assert result[0]["pnl_pct"] is None
+
+
+def test_eth_snipe_position_live_uses_wei_field_name():
+    positions = {TOKEN: {"entry_amount_in_wei": 2 * 10**18, "amount_held": 10**18}}
+    w3 = FakeW3(sell_out=10**18)  # без изменения цены
+    result = asyncio.run(eth_snipe_positions_live(w3, ROUTER, TOKEN_IN, positions))
+    assert result[0]["entry_amount_in"] == 2.0
+    assert result[0]["current_value"] == 1.0
+    assert abs(result[0]["pnl_pct"] - (-50.0)) < 1e-9
+
+
+def test_solana_copytrade_position_live_computes_pnl():
+    positions = {TOKEN: {"entry_amount_in": 10**9, "amount_held": 5 * 10**8, "token_in": "So1111...", "watched_wallet": "wallet1"}}
+    jupiter = FakeJupiter(out_amount=8 * 10**8)  # ниже входа -> убыток
+    result = asyncio.run(solana_copytrade_positions_live(jupiter, positions))
+    assert result[0]["current_value"] == 0.8
+    assert abs(result[0]["pnl_pct"] - (-20.0)) < 1e-9
+
+
+class _SecretStub:
+    def __init__(self, value):
+        self._value = value
+
+    def get_secret_value(self):
+        return self._value
+
+
+class _FakeSettings:
+    def __init__(self, tmp_path):
+        self.kill_switch_file = str(tmp_path / "kill")
+        self.heartbeat_dir = str(tmp_path)
+        self.trade_log_file = str(tmp_path / "trades.jsonl")
+        self.copytrade_positions_file = str(tmp_path / "positions.json")
+        self.snipe_positions_file = str(tmp_path / "positions_snipe.json")
+        self.solana_copytrade_positions_file = str(tmp_path / "positions_solana.json")
+        self.eth_rpc_http_url = _SecretStub("https://unreachable.invalid")
+        self.eth_router_address = "0xROUTER"
+        self.eth_weth_address = "0xWETH"
+        self.solana_rpc_http_url = None  # ветка Solana пропускается целиком (short-circuit на and)
+
+    def resolved_eth_private_key(self):
+        return "0x7413d6e6fe53a10645335f03b3fae74eaff8a21e65a0e7cbedcd53e8c1951004"
+
+
+class _DeadRouterFunctions:
+    def getAmountsOut(self, amount_in, path):
+        return _RaisingCallable()
+
+
+class _RaisingW3:
+    """Симулирует недоступный RPC без реального сетевого запроса в тестах.
+    contract() — локальная операция и у настоящего AsyncWeb3 (не ходит в
+    сеть), поэтому здесь она тоже успешна; падает именно вызов балансов и
+    котировок — та же асимметрия, что и в реальности, которую и ловит
+    test_gather_state_still_shows_positions_despite_eth_rpc_failure ниже."""
+
+    def __init__(self, provider):
+        pass
+
+    @property
+    def eth(self):
+        return self
+
+    async def get_balance(self, address):
+        raise RuntimeError("нет соединения с RPC")
+
+    def contract(self, address, abi):
+        return type("R", (), {"functions": _DeadRouterFunctions()})()
+
+
+def test_gather_state_reports_kill_switch_despite_eth_rpc_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(live_state, "AsyncWeb3", _RaisingW3)
+    monkeypatch.setattr(live_state, "fetch_usd_prices", lambda: {})
+
+    settings = _FakeSettings(tmp_path)
+    with open(settings.kill_switch_file, "w") as f:
+        f.write("test")
+
+    state = asyncio.run(gather_state(settings))
+    assert state["kill_switch_engaged"] is True
+    assert state["eth"]["balance"] is None
+    assert "eth_error" in state
+    assert state["solana"]["address"] is None
+
+
+def test_gather_state_still_shows_positions_despite_eth_rpc_failure(tmp_path, monkeypatch):
+    """Регрессия: раньше сбой ЗАПРОСА БАЛАНСА обрывал весь ETH-блок ДО того,
+    как позиции вообще успевали загрузиться из файла — теперь загрузка из
+    файла не зависит от того, удался ли отдельный RPC-вызов баланса."""
+    monkeypatch.setattr(live_state, "AsyncWeb3", _RaisingW3)
+    monkeypatch.setattr(live_state, "fetch_usd_prices", lambda: {})
+
+    settings = _FakeSettings(tmp_path)
+    with open(settings.copytrade_positions_file, "w") as f:
+        json.dump({TOKEN: {"entry_amount_in": 10**18, "amount_held": 5 * 10**17, "token_in": TOKEN_IN, "watched_wallet": "0xWHALE"}}, f)
+
+    state = asyncio.run(gather_state(settings))
+    assert state["eth"]["balance"] is None  # RPC действительно недоступен
+    positions = state["eth"]["copytrade_positions"]
+    assert len(positions) == 1
+    assert positions[0]["entry_amount_in"] == 1.0  # из файла, без RPC
+    assert positions[0]["current_value"] is None  # живую оценку получить не удалось — честно, не нулём
+
+
+if __name__ == "__main__":
+    test_eth_copytrade_position_live_computes_pnl()
+    test_eth_copytrade_position_live_handles_dead_pool()
+    test_eth_snipe_position_live_uses_wei_field_name()
+    test_solana_copytrade_position_live_computes_pnl()
+    print("ok")

@@ -594,19 +594,41 @@ Solana сознательно не реализован тем же способ
 - **CLI-дашборд**: `python -m wakefinder.dashboard` — печатает открытые позиции
   (ETH/Solana) и статистику по кошелькам в терминал. Переиспользует
   `wallet_stats.py`, никакого веб-сервера.
-- **Веб-дашборд** (`wakefinder/web.py`, опциональная зависимость): лёгкий
-  FastAPI-сервер, серверный HTML без SPA/сборки — визуальный слой над теми
-  же данными (`wallet_stats.py`/`price_feed.py`/позиции/`killswitch.py`/
-  `heartbeat.py`), ничего нового не хранит. Плюс метрики
-  (`wakefinder/common/metrics.py`): fill rate и точность симуляции
-  (`realized_profit` против `expected_profit`, см. "Сверка исполнения" выше)
-  по каждой сети. Установка и запуск:
+- **Веб-дашборд** (`wakefinder/web.py`, опциональная зависимость): FastAPI-
+  сервер с ЖИВЫМИ данными, не только файловыми — `wakefinder/live_state.py`
+  подключается к RPC напрямую (баланс кошелька ETH/SOL, текущая оценка
+  каждой открытой позиции через `getAmountsOut`/Jupiter `quote()` прямо
+  сейчас, не только `entry_amount_in` из момента входа) плюс всё, что было
+  раньше (`wallet_stats.py`/`price_feed.py`/`killswitch.py`/`heartbeat.py`,
+  метрики `wakefinder/common/metrics.py`). Страница — статичный HTML-каркас,
+  все данные приходят через `GET /api/state` (тот же JSON, который бы
+  использовал Telegram MiniApp или другой клиент) и опрашиваются JS каждые
+  3с, перерисовывая DOM без перезагрузки — не WebSocket, поллинга достаточно
+  для одного локального пользователя, без накладных расходов на broadcast.
+  Ошибка RPC (ETH или Solana недоступен) не валит весь дашборд — конкретная
+  секция показывает `eth_error`/`solana_error`, остальное (kill switch,
+  метрики, heartbeat) продолжает отображаться. Установка и запуск:
   ```bash
   pip install -e ".[web]"
   uvicorn wakefinder.web:app --reload
   ```
   Открыть `http://127.0.0.1:8000`. Торговые процессы не знают о существовании
   этого модуля и не зависят от него — можно не устанавливать `[web]` вовсе.
+- **Desktop-приложение**: `wakefinder/launcher.py` — один процесс поднимает
+  сервер и сам открывает браузер (`python -m wakefinder.launcher` или
+  установленная команда `wakefinder-dashboard`), вместо ручного запуска
+  uvicorn и перехода по адресу. Чтобы получить двойной клик — `.exe`/`.app`
+  вместо команды в терминале — соберите через
+  [PyInstaller](https://pyinstaller.org/):
+  ```bash
+  pip install -e ".[web]" pyinstaller
+  pyinstaller --onefile --name wakefinder-dashboard --collect-all uvicorn --collect-all fastapi wakefinder/launcher.py
+  ```
+  Бинарник появится в `dist/`. **Важно**: PyInstaller собирает бинарник ПОД
+  ТУ ОС, на которой запущен сам процесс сборки — Windows `.exe` нужно
+  собирать на Windows, macOS `.app`/бинарник на macOS и т.д., кросс-сборки
+  нет. `.env` (или переменные окружения) всё ещё нужны рядом с бинарником —
+  секреты не встраиваются в exe.
 - **Аутентификация дашборда**: `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` —
   HTTP Basic на `/` (сравнение через `secrets.compare_digest`, `/health`
   остаётся открытым для liveness-проб). Обе переменные опциональны, но

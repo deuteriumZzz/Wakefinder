@@ -19,6 +19,7 @@ web = ["fastapi>=0.110", "uvicorn>=0.30"]
 
 [project.scripts]
 wakefinder = "wakefinder.cli:main"
+wakefinder-dashboard = "wakefinder.launcher:main"
 
 [tool.setuptools.packages.find]
 include = ["wakefinder*"]

@@ -1,33 +1,33 @@
-"""Лёгкий веб-дашборд (FastAPI, серверный HTML, без SPA/сборки) — визуальный
-слой поверх уже существующих данных, ничего нового не хранит:
+"""Веб-дашборд (FastAPI, без SPA/сборки) — визуальный слой поверх
 common/wallet_stats.py, common/price_feed.py, common/metrics.py,
-common/killswitch.py, common/heartbeat.py, файлы позиций.
+common/killswitch.py, common/heartbeat.py и live_state.py (баланс кошелька и
+текущая оценка открытых позиций — единственная часть, которая реально ходит
+в RPC, см. docstring live_state.py).
 
 Опциональная зависимость — не часть основного пакета (`pip install -e
 ".[web]"`). Торговые процессы не знают о существовании этого файла и не
 зависят от него.
 
+Живой рендер: страница — статичный HTML-каркас, все данные приходят через
+`/api/state` (тот же JSON, что использовало бы Telegram MiniApp или другой
+клиент) и опрашиваются JS каждые 3с, перерисовывая DOM без перезагрузки
+страницы — не WebSocket (не нужен broadcast нескольким клиентам, поллинг
+проще и для одного локального пользователя более чем достаточен).
+
 Запуск: uvicorn wakefinder.web:app --reload
+Или как отдельное приложение: python -m wakefinder.launcher
 """
 
-import html
-import json
 import logging
-import os
 import secrets
-import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from wakefinder.common import heartbeat, killswitch
 from wakefinder.common.config import get_settings
-from wakefinder.common.metrics import compute_chain_metrics
-from wakefinder.common.price_feed import fetch_usd_prices
-from wakefinder.common.wallet_stats import compute_wallet_stats
-from wakefinder.dashboard import _usd_estimate
+from wakefinder.live_state import gather_state
 
 security = HTTPBasic(auto_error=False)
 logger = logging.getLogger("wakefinder.web")
@@ -62,146 +62,154 @@ def _check_auth(credentials: HTTPBasicCredentials | None = Depends(security)) ->
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized", headers={"WWW-Authenticate": "Basic"},
         )
 
-HEARTBEAT_STALE_SECONDS = 90
-HEARTBEAT_FILES = {
-    "eth_arb": "eth_arb.heartbeat",
-    "eth_copytrade": "eth_copytrade.heartbeat",
-    "solana_arb": "solana_arb.heartbeat",
-    "solana_copytrade": "solana_copytrade.heartbeat",
-}
 
-
-def _load_positions(path: str) -> dict:
-    if not os.path.exists(path):
-        return {}
-    with open(path) as f:
-        return json.load(f)
-
-
-def _render_positions_table(label: str, positions: dict) -> str:
-    if not positions:
-        return f"<h3>{html.escape(label)}</h3><p class='muted'>открытых позиций нет</p>"
-    rows = "".join(
-        f"<tr><td>{html.escape(token[:12])}...</td><td>{pos.get('entry_amount_in', '?')}</td>"
-        f"<td>{html.escape(str(pos.get('watched_wallet', ''))[:12])}...</td></tr>"
-        for token, pos in positions.items()
-    )
-    return f"""
-    <h3>{html.escape(label)} ({len(positions)})</h3>
-    <table><tr><th>Токен</th><th>entry_amount_in</th><th>Кошелёк</th></tr>{rows}</table>
-    """
-
-
-def _render_metrics_table(metrics: dict) -> str:
-    if not metrics:
-        return "<p class='muted'>нет данных в trade_log</p>"
-    rows = ""
-    for chain, m in sorted(metrics.items()):
-        realized = f"{m.avg_realized_profit:,.0f}" if m.avg_realized_profit is not None else "—"
-        accuracy = f"{m.simulation_accuracy:.0%}" if m.simulation_accuracy is not None else "—"
-        rows += (
-            f"<tr><td>{html.escape(chain)}</td><td>{m.total_attempts}</td><td>{m.included}</td>"
-            f"<td>{m.fill_rate:.0%}</td><td>{m.avg_expected_profit:,.0f}</td>"
-            f"<td>{realized}</td><td>{accuracy}</td></tr>"
-        )
-    return f"""
-    <table>
-      <tr><th>Сеть</th><th>Попыток</th><th>Included</th><th>Fill rate</th>
-          <th>Avg expected</th><th>Avg realized</th><th>Точность симуляции</th></tr>
-      {rows}
-    </table>
-    """
-
-
-def _render_wallet_stats_table(trade_log_path: str, prices: dict) -> str:
-    stats = compute_wallet_stats(trade_log_path)
-    if not stats:
-        return "<p class='muted'>нет данных в trade_log</p>"
-    rows = ""
-    for s in sorted(stats.values(), key=lambda s: s.net_pnl_estimate, reverse=True):
-        usd = _usd_estimate(s.net_pnl_estimate, s.chain, prices).strip()
-        rows += (
-            f"<tr><td>{html.escape(s.wallet[:14])}...</td><td>{html.escape(s.chain)}</td>"
-            f"<td>{s.entries}</td><td>{s.exits}</td><td>{s.net_pnl_estimate}{html.escape(usd)}</td>"
-            f"<td>{s.win_rate:.0%}</td></tr>"
-        )
-    return f"""
-    <table>
-      <tr><th>Кошелёк</th><th>Сеть</th><th>Входы</th><th>Выходы</th><th>net PnL~</th><th>Win rate</th></tr>
-      {rows}
-    </table>
-    """
-
-
-def _render_heartbeats(heartbeat_dir: str) -> str:
-    rows = ""
-    for label, filename in HEARTBEAT_FILES.items():
-        path = os.path.join(heartbeat_dir, filename)
-        beat = heartbeat.last_beat(path)
-        if beat is None:
-            status, css = "нет данных", "muted"
-        else:
-            age = time.time() - beat
-            stale = age > HEARTBEAT_STALE_SECONDS
-            status = f"{age:.0f}с назад"
-            css = "bad" if stale else "ok"
-        rows += f"<tr><td>{html.escape(label)}</td><td class='{css}'>{status}</td></tr>"
-    return f"<table><tr><th>Процесс</th><th>Heartbeat</th></tr>{rows}</table>"
+@app.get("/api/state", dependencies=[Depends(_check_auth)])
+async def api_state() -> JSONResponse:
+    settings = get_settings()
+    return JSONResponse(await gather_state(settings))
 
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(_check_auth)])
 async def index() -> str:
-    settings = get_settings()
-
-    kill_engaged = killswitch.is_engaged(settings.kill_switch_file)
-    kill_html = (
-        "<p class='bad'>KILL SWITCH ВКЛЮЧЁН — все процессы остановлены</p>"
-        if kill_engaged else "<p class='ok'>kill switch не активен</p>"
-    )
-
-    prices = fetch_usd_prices()
-    metrics = compute_chain_metrics(settings.trade_log_file)
-
-    eth_positions = _load_positions(settings.copytrade_positions_file)
-    sol_positions = _load_positions(settings.solana_copytrade_positions_file)
-
-    return f"""
-    <html>
-    <head>
-      <title>Wakefinder dashboard</title>
-      <meta http-equiv="refresh" content="30">
-      <style>
-        body {{ font-family: -apple-system, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }}
-        h1 {{ font-size: 1.4rem; }}
-        h3 {{ font-size: 1rem; margin-top: 2rem; }}
-        table {{ border-collapse: collapse; width: 100%; margin: 0.5rem 0 1.5rem; }}
-        th, td {{ text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #ddd; font-size: 0.9rem; }}
-        th {{ color: #666; font-weight: 600; }}
-        .muted {{ color: #888; }}
-        .ok {{ color: #1a7f37; }}
-        .bad {{ color: #c00; font-weight: 600; }}
-      </style>
-    </head>
-    <body>
-      <h1>Wakefinder dashboard</h1>
-      {kill_html}
-
-      <h3>Метрики (fill rate, точность симуляции)</h3>
-      {_render_metrics_table(metrics)}
-
-      <h3>Heartbeat процессов</h3>
-      {_render_heartbeats(settings.heartbeat_dir)}
-
-      {_render_positions_table("ETH copytrade — открытые позиции", eth_positions)}
-      {_render_positions_table("Solana copytrade — открытые позиции", sol_positions)}
-
-      <h3>Статистика по watched-кошелькам</h3>
-      {_render_wallet_stats_table(settings.trade_log_file, prices)}
-    </body>
-    </html>
-    """
+    return _PAGE
 
 
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+_PAGE = """
+<html>
+<head>
+  <title>Wakefinder dashboard</title>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --bg: #0b0f0e; --panel: #111715; --border: #1f2b27; --text: #d7e5df; --muted: #6f8a80;
+      --accent: #35d68a; --bad: #ff5d5d; --warn: #ffb454;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+      background: var(--bg); color: var(--text); max-width: 1100px; margin: 2rem auto; padding: 0 1rem;
+    }
+    h1 { font-size: 1.2rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--accent); }
+    h3 { font-size: 0.85rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 2rem 0 0.5rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 0.9rem 1rem; }
+    .card .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .card .value { font-size: 1.3rem; margin-top: 0.25rem; font-variant-numeric: tabular-nums; }
+    table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1rem; overflow-x: auto; display: block; }
+    th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+    th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.04em; }
+    .muted { color: var(--muted); }
+    .ok { color: var(--accent); }
+    .bad { color: var(--bad); font-weight: 600; }
+    .warn { color: var(--warn); }
+    #kill-banner { padding: 0.6rem 1rem; border-radius: 6px; margin: 0.75rem 0; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Wakefinder dashboard</h1>
+  <div id="kill-banner"></div>
+
+  <div class="grid">
+    <div class="card"><div class="label">ETH баланс</div><div class="value" id="eth-balance">…</div><div class="muted" id="eth-address"></div></div>
+    <div class="card"><div class="label">SOL баланс</div><div class="value" id="sol-balance">…</div><div class="muted" id="sol-address"></div></div>
+  </div>
+
+  <h3>ETH copytrade — открытые позиции</h3>
+  <table id="eth-copytrade-table"><thead><tr><th>Токен</th><th>Вход</th><th>Сейчас</th><th>PnL</th><th>Кошелёк</th></tr></thead><tbody></tbody></table>
+
+  <h3>ETH snipe — открытые позиции</h3>
+  <table id="eth-snipe-table"><thead><tr><th>Токен</th><th>Вход</th><th>Сейчас</th><th>PnL</th></tr></thead><tbody></tbody></table>
+
+  <h3>Solana copytrade — открытые позиции</h3>
+  <table id="sol-copytrade-table"><thead><tr><th>Токен</th><th>Вход</th><th>Сейчас</th><th>PnL</th><th>Кошелёк</th></tr></thead><tbody></tbody></table>
+
+  <h3>Метрики (fill rate, точность симуляции)</h3>
+  <table id="metrics-table"><thead><tr><th>Сеть</th><th>Попыток</th><th>Included</th><th>Fill rate</th><th>Avg expected</th><th>Avg realized</th><th>Точность</th></tr></thead><tbody></tbody></table>
+
+  <h3>Heartbeat процессов</h3>
+  <table id="heartbeats-table"><thead><tr><th>Процесс</th><th>Heartbeat</th></tr></thead><tbody></tbody></table>
+
+  <h3>Статистика по watched-кошелькам</h3>
+  <table id="wallet-stats-table"><thead><tr><th>Кошелёк</th><th>Сеть</th><th>Входы</th><th>Выходы</th><th>net PnL~</th><th>Win rate</th></tr></thead><tbody></tbody></table>
+
+<script>
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function short(a) { return a ? esc(a).slice(0, 12) + "…" : ""; }
+function pnlCell(pct) {
+  if (pct === null || pct === undefined) return '<span class="muted">—</span>';
+  const cls = pct >= 0 ? "ok" : "bad";
+  const sign = pct >= 0 ? "+" : "";
+  return `<span class="${cls}">${sign}${pct.toFixed(1)}%</span>`;
+}
+function num(v, digits) { return (v === null || v === undefined) ? '<span class="muted">—</span>' : v.toFixed(digits ?? 4); }
+
+function renderPositions(tbodyId, rows, withWallet) {
+  const tbody = document.querySelector(`#${tbodyId} tbody`);
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="${withWallet ? 5 : 4}" class="muted">открытых позиций нет</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(p => `
+    <tr><td>${short(p.token)}</td><td>${num(p.entry_amount_in)}</td><td>${num(p.current_value)}</td>
+    <td>${pnlCell(p.pnl_pct)}</td>${withWallet ? `<td>${short(p.watched_wallet)}</td>` : ""}</tr>
+  `).join("");
+}
+
+async function refresh() {
+  let state;
+  try {
+    const resp = await fetch("/api/state");
+    if (!resp.ok) return;
+    state = await resp.json();
+  } catch (e) { return; }
+
+  const banner = document.getElementById("kill-banner");
+  if (state.kill_switch_engaged) {
+    banner.className = "bad"; banner.textContent = "KILL SWITCH ВКЛЮЧЁН — все процессы остановлены";
+  } else {
+    banner.className = "ok"; banner.textContent = "kill switch не активен";
+  }
+
+  document.getElementById("eth-balance").textContent = state.eth.balance !== null ? state.eth.balance.toFixed(4) + " ETH" : "—";
+  document.getElementById("eth-address").textContent = short(state.eth.address);
+  document.getElementById("sol-balance").textContent = state.solana.balance !== null ? state.solana.balance.toFixed(4) + " SOL" : "—";
+  document.getElementById("sol-address").textContent = short(state.solana.address);
+
+  renderPositions("eth-copytrade-table", state.eth.copytrade_positions, true);
+  renderPositions("eth-snipe-table", state.eth.snipe_positions, false);
+  renderPositions("sol-copytrade-table", state.solana.copytrade_positions, true);
+
+  const metricsBody = document.querySelector("#metrics-table tbody");
+  const chains = Object.keys(state.metrics);
+  metricsBody.innerHTML = chains.length ? chains.sort().map(chain => {
+    const m = state.metrics[chain];
+    return `<tr><td>${esc(chain)}</td><td>${m.total_attempts}</td><td>${m.included}</td>
+      <td>${(m.fill_rate * 100).toFixed(0)}%</td><td>${m.avg_expected_profit.toLocaleString()}</td>
+      <td>${m.avg_realized_profit !== null ? m.avg_realized_profit.toLocaleString() : "—"}</td>
+      <td>${m.simulation_accuracy !== null ? (m.simulation_accuracy * 100).toFixed(0) + "%" : "—"}</td></tr>`;
+  }).join("") : '<tr><td colspan="7" class="muted">нет данных в trade_log</td></tr>';
+
+  const hbBody = document.querySelector("#heartbeats-table tbody");
+  hbBody.innerHTML = state.heartbeats.map(h => `
+    <tr><td>${esc(h.process)}</td><td class="${h.stale ? 'bad' : 'ok'}">${h.age_seconds !== null ? h.age_seconds.toFixed(0) + "с назад" : "нет данных"}</td></tr>
+  `).join("");
+
+  const wsBody = document.querySelector("#wallet-stats-table tbody");
+  wsBody.innerHTML = state.wallet_stats.length ? state.wallet_stats.map(s => `
+    <tr><td>${short(s.wallet)}</td><td>${esc(s.chain)}</td><td>${s.entries}</td><td>${s.exits}</td>
+    <td>${num(s.net_pnl_estimate)}${s.net_pnl_usd !== null ? ` (~$${s.net_pnl_usd.toFixed(2)})` : ""}</td>
+    <td>${(s.win_rate * 100).toFixed(0)}%</td></tr>
+  `).join("") : '<tr><td colspan="6" class="muted">нет данных в trade_log</td></tr>';
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
+"""
