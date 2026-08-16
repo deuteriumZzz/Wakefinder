@@ -161,6 +161,15 @@ class Settings(BaseSettings):
     heartbeat_dir: str = "."
     heartbeat_interval_seconds: float = 30
 
+    # HTTP Basic auth для веб-дашборда (wakefinder/web.py). Обязаны быть
+    # заданы ВМЕСТЕ — иначе дашборд отдаётся без аутентификации и громко
+    # предупреждает об этом при старте (см. web.py). Дашборд показывает
+    # исторические позиции/метрики/статистику по watched-кошелькам — не
+    # секрет уровня приватного ключа, но открывать его анонимно за пределами
+    # localhost не стоит.
+    dashboard_username: str | None = None
+    dashboard_password: SecretStr | None = None
+
     # Поэтапный ввод капитала (см. common/canary.py) — по умолчанию выключен
     # (1.0 = сразу полный размер), включается явно в профиле для нового
     # watched_wallets-набора/пары, которым ещё не доверяете на полную.

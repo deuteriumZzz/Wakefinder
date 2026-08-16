@@ -64,6 +64,30 @@ def test_index_shows_positions_and_metrics(tmp_path, monkeypatch):
     assert resp.status_code == 200
 
 
+def test_index_requires_auth_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_USERNAME", "admin")
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")
+    client = _client(tmp_path, monkeypatch)
+    resp = client.get("/")
+    assert resp.status_code == 401
+
+
+def test_index_rejects_wrong_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_USERNAME", "admin")
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")
+    client = _client(tmp_path, monkeypatch)
+    resp = client.get("/", auth=("admin", "wrong"))
+    assert resp.status_code == 401
+
+
+def test_index_accepts_valid_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_USERNAME", "admin")
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")
+    client = _client(tmp_path, monkeypatch)
+    resp = client.get("/", auth=("admin", "s3cret"))
+    assert resp.status_code == 200
+
+
 if __name__ == "__main__":
     test_health()
     print("run remaining tests via pytest (uses tmp_path/monkeypatch fixtures)")

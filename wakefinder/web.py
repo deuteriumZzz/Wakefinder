@@ -12,11 +12,15 @@ common/killswitch.py, common/heartbeat.py, файлы позиций.
 
 import html
 import json
+import logging
 import os
+import secrets
 import time
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from wakefinder.common import heartbeat, killswitch
 from wakefinder.common.config import get_settings
@@ -25,7 +29,38 @@ from wakefinder.common.price_feed import fetch_usd_prices
 from wakefinder.common.wallet_stats import compute_wallet_stats
 from wakefinder.dashboard import _usd_estimate
 
-app = FastAPI(title="Wakefinder dashboard")
+security = HTTPBasic(auto_error=False)
+logger = logging.getLogger("wakefinder.web")
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    settings = get_settings()
+    if not (settings.dashboard_username and settings.dashboard_password):
+        logger.warning(
+            "DASHBOARD_USERNAME/DASHBOARD_PASSWORD не заданы — дашборд отдаётся БЕЗ аутентификации, "
+            "не открывайте порт дальше localhost"
+        )
+    yield
+
+
+app = FastAPI(title="Wakefinder dashboard", lifespan=_lifespan)
+
+
+def _check_auth(credentials: HTTPBasicCredentials | None = Depends(security)) -> None:
+    settings = get_settings()
+    if not (settings.dashboard_username and settings.dashboard_password):
+        return  # без DASHBOARD_USERNAME/DASHBOARD_PASSWORD — дашборд открыт, см. _lifespan
+    expected_password = settings.dashboard_password.get_secret_value()
+    valid = (
+        credentials is not None
+        and secrets.compare_digest(credentials.username, settings.dashboard_username)
+        and secrets.compare_digest(credentials.password, expected_password)
+    )
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized", headers={"WWW-Authenticate": "Basic"},
+        )
 
 HEARTBEAT_STALE_SECONDS = 90
 HEARTBEAT_FILES = {
@@ -114,7 +149,7 @@ def _render_heartbeats(heartbeat_dir: str) -> str:
     return f"<table><tr><th>Процесс</th><th>Heartbeat</th></tr>{rows}</table>"
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, dependencies=[Depends(_check_auth)])
 async def index() -> str:
     settings = get_settings()
 
