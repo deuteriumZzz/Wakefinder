@@ -150,6 +150,16 @@ class Settings(BaseSettings):
     snipe_round_trip_check: bool = True
     snipe_positions_file: str = "positions_snipe.json"
 
+    # Снайпинг на Solana (chains/solana/snipe.py, mint_watcher.py,
+    # snipe_filter.py) — отдельный файл позиций от ETH-снайпинга (та же
+    # причина, что у solana_copytrade_positions_file). snipe_size_pct/
+    # trailing_stop_pct/check_interval/max_concurrent_positions выше —
+    # общие с ETH (значения одного смысла: доля баланса, %, счётчик).
+    # snipe_round_trip_check НЕ применяется здесь — Flashbots-specific.
+    solana_snipe_positions_file: str = "positions_snipe_solana.json"
+    solana_snipe_test_amount_sol: float = 0.05
+    solana_snipe_min_liquidity_sol: float = 1.0
+
     # Telegram-алерты на критичные события (kill switch, стоп-лосс, серия
     # неудач). Пустые значения = алерты выключены, не обязательны.
     telegram_bot_token: SecretStr = SecretStr("")

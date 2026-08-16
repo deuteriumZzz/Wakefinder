@@ -24,7 +24,7 @@ import tomllib
 logger = logging.getLogger("wakefinder.cli")
 
 CHAINS = ("eth", "solana")
-STRATEGIES = ("arb", "copytrade", "snipe")  # snipe пока реализован только для chain="eth", см. load_profile()
+STRATEGIES = ("arb", "copytrade", "snipe")
 
 # ключи TOML [risk] -> переменные окружения Settings (common/config.py)
 _RISK_ENV_MAP = {
@@ -51,6 +51,8 @@ _RISK_ENV_MAP = {
     "snipe_trailing_stop_pct": "SNIPE_TRAILING_STOP_PCT",
     "snipe_trailing_stop_check_interval_seconds": "SNIPE_TRAILING_STOP_CHECK_INTERVAL_SECONDS",
     "snipe_max_concurrent_positions": "SNIPE_MAX_CONCURRENT_POSITIONS",
+    "solana_snipe_test_amount_sol": "SOLANA_SNIPE_TEST_AMOUNT_SOL",
+    "solana_snipe_min_liquidity_sol": "SOLANA_SNIPE_MIN_LIQUIDITY_SOL",
     "canary_start_fraction": "CANARY_START_FRACTION",
     "canary_ramp_trades": "CANARY_RAMP_TRADES",
 }
@@ -63,8 +65,6 @@ def load_profile(path: str) -> dict:
         raise ValueError(f"профиль {path}: chain должен быть одним из {CHAINS}")
     if profile.get("strategy") not in STRATEGIES:
         raise ValueError(f"профиль {path}: strategy должен быть одним из {STRATEGIES}")
-    if profile["strategy"] == "snipe" and profile["chain"] != "eth":
-        raise ValueError(f"профиль {path}: strategy 'snipe' пока реализован только для chain='eth'")
     return profile
 
 
@@ -216,6 +216,9 @@ async def run_profile(path: str) -> None:
     elif chain == "eth" and strategy == "snipe":
         from wakefinder.chains.eth.snipe import run as eth_snipe_run
         await eth_snipe_run(factory_address=profile.get("factory_address"), token_denylist=token_denylist)
+    elif chain == "solana" and strategy == "snipe":
+        from wakefinder.chains.solana.snipe import run as solana_snipe_run
+        await solana_snipe_run(token_denylist=token_denylist)
 
 
 def main() -> None:

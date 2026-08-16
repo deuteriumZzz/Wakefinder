@@ -30,6 +30,19 @@ class NewPool:
 
 
 @dataclass
+class NewMint:
+    """Только что созданный SPL-токен (SPL Token Program `InitializeMint`/
+    `InitializeMint2`) — сигнал для снайпинга на Solana. НЕ значит, что у
+    токена уже есть ликвидный пул — большинство новых минтов никогда не
+    получают пул вообще; реальная проверка "можно ли купить/продать" —
+    отдельный шаг через Jupiter (см. chains/solana/snipe_filter.py)."""
+
+    tx_hash: str
+    mint_address: str
+    slot: int
+
+
+@dataclass
 class SimResult:
     """Результат симуляции стратегии по конкретному pending-свопу.
 

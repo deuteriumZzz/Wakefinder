@@ -43,10 +43,10 @@ def test_load_profile_accepts_snipe_on_eth(tmp_path):
     assert profile["strategy"] == "snipe"
 
 
-def test_load_profile_rejects_snipe_on_solana(tmp_path):
+def test_load_profile_accepts_snipe_on_solana(tmp_path):
     path = _write_toml(tmp_path / "p.toml", 'chain = "solana"\nstrategy = "snipe"\n')
-    with pytest.raises(ValueError, match="snipe"):
-        load_profile(path)
+    profile = load_profile(path)
+    assert profile["strategy"] == "snipe"
 
 
 def test_apply_risk_overrides_sets_env(monkeypatch):

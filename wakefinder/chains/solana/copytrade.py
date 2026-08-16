@@ -75,18 +75,21 @@ def _save_positions(path: str, positions: dict[str, Position]) -> None:
 
 async def _swap_via_jupiter_and_send(
     client: AsyncClient, jupiter: Jupiter, sender: JitoBundleSender, keypair: Keypair, tip: AdaptiveTipController,
-    input_mint: str, output_mint: str, amount_in: int,
+    input_mint: str, output_mint: str, amount_in: int, slippage_bps: int = SLIPPAGE_BPS,
 ) -> tuple[bool, int]:
-    """Возвращает (included, ориентировочный amount_out — до слиппеджа)."""
+    """Возвращает (included, ориентировочный amount_out — до слиппеджа).
+    slippage_bps переопределяем для снайпинга (chains/solana/snipe.py) —
+    свежесозданный пул волатильнее обычного копитрейд-входа, дефолт здесь
+    остаётся прежним для существующих вызовов."""
     try:
         quote = await jupiter.quote(
             input_mint=input_mint, output_mint=output_mint, amount=amount_in,
-            slippage_bps=SLIPPAGE_BPS, only_direct_routes=True,
+            slippage_bps=slippage_bps, only_direct_routes=True,
         )
         expected_out = int(quote["outAmount"])
         unsigned = await jupiter.swap(
             input_mint=input_mint, output_mint=output_mint, amount=amount_in,
-            slippage_bps=SLIPPAGE_BPS, only_direct_routes=True,
+            slippage_bps=slippage_bps, only_direct_routes=True,
         )
     except Exception as exc:
         logger.error("Jupiter не смог построить транзакцию (%s)", type(exc).__name__)
