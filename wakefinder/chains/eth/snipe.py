@@ -35,7 +35,8 @@ from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 from wakefinder import live_config
 from wakefinder.chains.eth.abi import ERC20_ABI, ROUTER_ABI
 from wakefinder.chains.eth.pair_watcher import PairCreatedWatcher
-from wakefinder.chains.eth.snipe_filter import check_new_pool
+from wakefinder.chains.eth.sender import FlashbotsBundleSender
+from wakefinder.chains.eth.snipe_filter import check_new_pool, check_round_trip_sellable
 from wakefinder.common import heartbeat, killswitch, trade_log
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.canary import CanaryController
@@ -117,14 +118,14 @@ async def _buy(
     nonce = await w3.eth.get_transaction_count(account.address, "pending")
     max_fee, priority_fee = await _fees(w3)
     tx = router.functions.swapExactETHForTokens(
-        amount_out_min, [weth_address, token], account.address, int(time.time()) + 60,
+        amountOutMin=amount_out_min, path=[weth_address, token], to=account.address, deadline=int(time.time()) + 60,
     ).build_transaction(
         {
             "from": account.address, "value": amount_in_wei, "nonce": nonce, "gas": GAS_LIMIT,
             "maxFeePerGas": max_fee, "maxPriorityFeePerGas": priority_fee, "chainId": chain_id,
         }
     )
-    raw = account.sign_transaction(tx).raw_transaction
+    raw = account.sign_transaction(tx).rawTransaction
     included, tx_hash = await _send_raw(w3, raw)
     return included, tx_hash, expected_out
 
@@ -139,7 +140,7 @@ async def _approve(w3: AsyncWeb3, account, router_address: str, chain_id: int, t
             "maxFeePerGas": max_fee, "maxPriorityFeePerGas": priority_fee, "chainId": chain_id,
         }
     )
-    raw = account.sign_transaction(tx).raw_transaction
+    raw = account.sign_transaction(tx).rawTransaction
     included, _ = await _send_raw(w3, raw)
     return included
 
@@ -156,14 +157,14 @@ async def _sell(
     nonce = await w3.eth.get_transaction_count(account.address, "pending")
     max_fee, priority_fee = await _fees(w3)
     tx = router.functions.swapExactTokensForETH(
-        amount_in, amount_out_min, [token, weth_address], account.address, int(time.time()) + 60,
+        amountIn=amount_in, amountOutMin=amount_out_min, path=[token, weth_address], to=account.address, deadline=int(time.time()) + 60,
     ).build_transaction(
         {
             "from": account.address, "nonce": nonce, "gas": GAS_LIMIT,
             "maxFeePerGas": max_fee, "maxPriorityFeePerGas": priority_fee, "chainId": chain_id,
         }
     )
-    raw = account.sign_transaction(tx).raw_transaction
+    raw = account.sign_transaction(tx).rawTransaction
     included, _ = await _send_raw(w3, raw)
     return included, expected_out
 
@@ -222,6 +223,11 @@ async def _trailing_stop_loop(
 async def run(factory_address: str | None = None, token_denylist: frozenset[str] = frozenset()):
     settings = get_settings()
     account = Account.from_key(settings.resolved_eth_private_key())
+    fb_signer = Account.from_key(settings.resolved_flashbots_signer_key())
+    # ТОЛЬКО для round-trip симуляции (check_round_trip_sellable) — этот
+    # sender ничего не отправляет, реальные вход/выход снайпинга по-прежнему
+    # идут в публичный мемпул (см. docstring модуля).
+    sim_sender = FlashbotsBundleSender(rpc_url=settings.eth_rpc_http_url.get_secret_value(), signer_account=fb_signer)
 
     token_denylist = {a.lower() for a in token_denylist}
     live_config.seed_if_missing(settings.live_config_file, set(), set(), token_denylist)
@@ -305,6 +311,15 @@ async def run(factory_address: str | None = None, token_denylist: frozenset[str]
                     already_held = result.token in positions
                 if already_held:
                     continue
+
+                if settings.snipe_round_trip_check:
+                    round_trip = await check_round_trip_sellable(
+                        w3, sim_sender, account, settings.eth_router_address, settings.eth_weth_address,
+                        result.token, chain_id, test_amount_wei,
+                    )
+                    if not round_trip.passed:
+                        logger.info("снайп round-trip проверка отклонила токен=%s: %s", result.token, round_trip.reason)
+                        continue
 
                 balance = await w3.eth.get_balance(account.address)
                 amount_in = int(balance * settings.snipe_size_pct / 100)

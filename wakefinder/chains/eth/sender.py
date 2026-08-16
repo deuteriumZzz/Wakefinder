@@ -43,16 +43,18 @@ class FlashbotsBundleSender(BundleSender):
             flashbot(w3, signer_account, relay_url)
             self._clients.append(w3)
 
-    def _send_sync(self, bundle: Bundle) -> bool:
-        fb_bundle = [{"signed_transaction": raw} for raw in bundle.raw_txs]
+    def _simulate_sync(self, raw_txs: list[str], target_block: int) -> dict:
+        fb_bundle = [{"signed_transaction": raw} for raw in raw_txs]
+        # На первом клиенте — все relay симулируют против одного и того же
+        # состояния сети, повторять на каждом бессмысленно.
+        return self._clients[0].flashbots.simulate(fb_bundle, target_block)
 
-        # Симулируем один раз, на первом клиенте — та же страховка от
-        # рассинхронизации, что и раньше; не нужно повторять на каждом relay,
-        # все они симулируют против одного и того же состояния сети.
-        simulation = self._clients[0].flashbots.simulate(fb_bundle, bundle.target_block)
+    def _send_sync(self, bundle: Bundle) -> bool:
+        simulation = self._simulate_sync(bundle.raw_txs, bundle.target_block)
         if simulation.get("error") or any(tx.get("error") for tx in simulation.get("results", [])):
             return False
 
+        fb_bundle = [{"signed_transaction": raw} for raw in bundle.raw_txs]
         pending_results = []
         for w3 in self._clients:
             try:
@@ -65,6 +67,12 @@ class FlashbotsBundleSender(BundleSender):
             if receipts is not None and len(receipts) > 0:
                 return True
         return False
+
+    async def simulate(self, raw_txs: list[str], target_block: int) -> dict:
+        """Публичный доступ к симуляции без реальной отправки — используется
+        chains/eth/snipe_filter.py для round-trip проверки "можно ли продать
+        этот токен обратно" (см. её docstring), не только send()'ом."""
+        return await asyncio.to_thread(self._simulate_sync, raw_txs, target_block)
 
     async def send(self, bundle: Bundle) -> bool:
         return await asyncio.to_thread(self._send_sync, bundle)

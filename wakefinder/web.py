@@ -153,6 +153,12 @@ async def api_telegram_state() -> JSONResponse:
     return JSONResponse(await gather_state(settings))
 
 
+@app.get("/api/telegram/price_history", dependencies=[Depends(_check_telegram_auth)])
+async def api_telegram_price_history(token: str) -> list[dict]:
+    settings = get_settings()
+    return read_history(settings.price_history_file, token)
+
+
 @app.post("/api/telegram/killswitch", dependencies=[Depends(_check_telegram_auth)])
 async def api_telegram_killswitch(body: KillSwitchAction) -> dict:
     settings = get_settings()
@@ -403,6 +409,7 @@ _TELEGRAM_PAGE = """
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
   <style>
     :root {
       --bg: #0b0f0e; --panel: #111715; --border: #1f2b27; --text: #d7e5df; --muted: #6f8a80;
@@ -437,6 +444,9 @@ _TELEGRAM_PAGE = """
 
   <h3>Открытые позиции</h3>
   <div class="card" id="positions"><div class="muted">загрузка…</div></div>
+
+  <h3 id="chart-title" style="display:none;">График</h3>
+  <div id="chart-container" style="height:180px; display:none;"></div>
 
   <h3>Живой конфиг</h3>
   <div class="muted" style="font-size:0.75rem; margin-bottom:0.4rem;">watched_wallets / allowlist / denylist / risk — подхватится ботом на следующем опросе.</div>
@@ -475,8 +485,45 @@ function renderPositions(state) {
   ];
   const el = document.getElementById("positions");
   el.innerHTML = rows.length ? rows.map(p => `
-    <div class="pos-row"><span>${esc(p.tag)} · ${short(p.token)}</span><span>${pnl(p.pnl_pct)}</span></div>
+    <div class="pos-row"><a href="#" class="token-link" style="color:var(--accent);" data-token="${esc(p.token)}">${esc(p.tag)} · ${short(p.token)}</a><span>${pnl(p.pnl_pct)}</span></div>
   `).join("") : '<div class="muted">открытых позиций нет</div>';
+  el.querySelectorAll(".token-link").forEach(link => link.addEventListener("click", (e) => {
+    e.preventDefault();
+    selectChartToken(link.dataset.token);
+  }));
+}
+
+let miniChart = null;
+let miniChartSeries = null;
+
+async function selectChartToken(token) {
+  const titleEl = document.getElementById("chart-title");
+  const containerEl = document.getElementById("chart-container");
+  titleEl.style.display = "block";
+  titleEl.textContent = `График — ${short(token)}`;
+  let points;
+  try {
+    points = await callApi(`/api/telegram/price_history?token=${encodeURIComponent(token)}`);
+  } catch (e) {
+    points = [];
+  }
+  if (!points.length) {
+    containerEl.style.display = "none";
+    titleEl.textContent = `График — ${short(token)} (пока нет накопленной истории)`;
+    return;
+  }
+  containerEl.style.display = "block";
+  if (!miniChart) {
+    miniChart = LightweightCharts.createChart(containerEl, {
+      layout: { background: { color: "#111715" }, textColor: "#d7e5df" },
+      grid: { vertLines: { color: "#1f2b27" }, horzLines: { color: "#1f2b27" } },
+      timeScale: { timeVisible: true },
+      height: 180,
+    });
+    miniChartSeries = miniChart.addLineSeries({ color: "#35d68a" });
+  }
+  miniChartSeries.setData(points.map(p => ({ time: Math.floor(p.ts), value: p.value })));
+  miniChart.timeScale().fitContent();
 }
 
 function updateKillButton() {

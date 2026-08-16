@@ -75,11 +75,11 @@ def _to_0x_hex(raw: bytes) -> str:
 def _sign_leg(router_address: str, account, chain_id: int, nonce: int, max_fee: int, priority_fee: int, path: list[str], amount_in: int, amount_out_min: int) -> bytes:
     router = _ENCODER.eth.contract(address=router_address, abi=ROUTER_ABI)
     tx = router.functions.swapExactTokensForTokens(
-        amount_in,
-        amount_out_min,
-        path,
-        account.address,
-        int(time.time()) + 60,
+        amountIn=amount_in,
+        amountOutMin=amount_out_min,
+        path=path,
+        to=account.address,
+        deadline=int(time.time()) + 60,
     ).build_transaction(
         {
             "from": account.address,
@@ -90,7 +90,7 @@ def _sign_leg(router_address: str, account, chain_id: int, nonce: int, max_fee: 
             "chainId": chain_id,
         }
     )
-    return account.sign_transaction(tx).raw_transaction
+    return account.sign_transaction(tx).rawTransaction
 
 
 def _compute_fees(base_fee: int, max_gas_gwei: float, expected_profit_wei: int, profit_share_bps: int) -> tuple[int, int]:

@@ -33,6 +33,7 @@ def _client(tmp_path, monkeypatch):
     get_settings.cache_clear()
     monkeypatch.setenv("KILL_SWITCH_FILE", str(tmp_path / "kill"))
     monkeypatch.setenv("LIVE_CONFIG_FILE", str(tmp_path / "live_config.json"))
+    monkeypatch.setenv("PRICE_HISTORY_FILE", str(tmp_path / "price_history.jsonl"))
     # /api/state обычно ходит в реальный RPC через live_state.gather_state — в
     # тестах веб-слоя (auth/роутинг/передача JSON) это не нужно, реальную
     # логику валидации позиций/баланса покрывает tests/test_live_state.py.
@@ -217,6 +218,29 @@ def test_api_telegram_config_roundtrips(tmp_path, monkeypatch):
 
     resp = client.get("/api/telegram/config", headers=headers)
     assert resp.json()["watched_wallets"] == ["0xBBB"]
+
+
+def test_api_price_history_endpoints_return_seeded_points(tmp_path, monkeypatch):
+    import time
+
+    from wakefinder.common.price_history import log_snapshot
+
+    monkeypatch.setenv("DASHBOARD_USERNAME", "admin")
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-bot-token")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_ID", "12345")
+    client = _client(tmp_path, monkeypatch)
+
+    log_snapshot(str(tmp_path / "price_history.jsonl"), "0xTOKEN", 1.23)
+
+    resp = client.get("/api/price_history?token=0xTOKEN", auth=("admin", "s3cret"))
+    assert resp.status_code == 200
+    assert resp.json()[0]["value"] == 1.23
+
+    init_data = _sign_init_data({"user": '{"id":12345}', "auth_date": str(int(time.time()))}, "fake-bot-token")
+    resp = client.get("/api/telegram/price_history?token=0xTOKEN", headers={"X-Telegram-Init-Data": init_data})
+    assert resp.status_code == 200
+    assert resp.json()[0]["value"] == 1.23
 
 
 if __name__ == "__main__":

@@ -142,6 +142,12 @@ class Settings(BaseSettings):
     snipe_trailing_stop_pct: float = Field(default=30.0, gt=0, le=100)
     snipe_trailing_stop_check_interval_seconds: float = 15
     snipe_max_concurrent_positions: int = Field(default=3, ge=1)
+    # Round-trip симуляция покупки+продажи через flashbots.simulate перед
+    # реальным входом (chains/eth/snipe_filter.py:check_round_trip_sellable)
+    # — ловит honeypot'ы, которые check_new_pool не видит (см. её docstring).
+    # Стоит дополнительных RPC-вызовов и задержки перед входом — выключайте,
+    # если скорость важнее этой проверки.
+    snipe_round_trip_check: bool = True
     snipe_positions_file: str = "positions_snipe.json"
 
     # Telegram-алерты на критичные события (kill switch, стоп-лосс, серия

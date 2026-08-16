@@ -98,7 +98,7 @@ def _save_positions(path: str, positions: dict[str, Position]) -> None:
 def _sign_swap(router_address, account, chain_id, nonce, max_fee, priority_fee, path, amount_in, amount_out_min) -> bytes:
     router = _ENCODER.eth.contract(address=router_address, abi=ROUTER_ABI)
     tx = router.functions.swapExactTokensForTokens(
-        amount_in, amount_out_min, path, account.address, int(time.time()) + 60,
+        amountIn=amount_in, amountOutMin=amount_out_min, path=path, to=account.address, deadline=int(time.time()) + 60,
     ).build_transaction(
         {
             "from": account.address,
@@ -109,7 +109,7 @@ def _sign_swap(router_address, account, chain_id, nonce, max_fee, priority_fee, 
             "chainId": chain_id,
         }
     )
-    return account.sign_transaction(tx).raw_transaction
+    return account.sign_transaction(tx).rawTransaction
 
 
 async def _reserves(w3: AsyncWeb3, pool_address: str, token_in: str) -> tuple[int, int]:
