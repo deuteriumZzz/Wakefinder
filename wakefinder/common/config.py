@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     # Список MEV-relay через запятую — один и тот же бандл уходит параллельно
     # во все (см. docstring chains/eth/sender.py). Дефолт — только Flashbots.
     eth_relay_urls: str = "https://relay.flashbots.net"
+    # API-ключи через запятую, ПОЗИЦИОННО сопоставленные с eth_relay_urls —
+    # relay помимо Flashbots (bloXroute, Eden и т.п.) обычно требуют свою
+    # авторизацию. Пустая позиция ("," подряд или короче списка URL) = для
+    # ЭТОГО relay заголовок не добавляется (Flashbots и раньше работал без
+    # него). Отправляется как `Authorization: <ключ>` — общий случай
+    # bearer-токена; relay с другой схемой авторизации сюда не впишутся
+    # без доработки sender.py, честно не претендуем на универсальность.
+    eth_relay_api_keys: str = ""
     # Ровно один источник на ключ: plaintext ИЛИ зашифрованный файл (см.
     # common/keystore.py) — не оба и не ни одного. *_KEY_FILE + пассфраза в
     # WALLET_KEY_PASSPHRASE — альтернатива голому ключу в .env; шифрует

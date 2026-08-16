@@ -13,10 +13,15 @@ coinbaseDiff — так что она не может подменять соб�
 Мульти-relay: один и тот же подписанный бандл отправляется параллельно во
 все настроенные relay — у каждого свой набор builder'ов, поэтому это реально
 увеличивает шанс попасть в блок, а не дублирует одну и ту же попытку. Дефолт —
-только Flashbots (обратная совместимость). ponytail: relay помимо Flashbots
-могут требовать собственную авторизацию (API-ключ/заголовок), которая здесь
-НЕ реализована — добавляйте такой relay, только если он принимает тот же
-`eth_sendBundle` без доп. авторизации, либо расширяйте `_client_for_relay`.
+только Flashbots (обратная совместимость).
+
+Авторизация non-Flashbots relay (bloXroute, Eden и т.п., ETH_RELAY_API_KEYS в
+config.py): `flashbots` пакет добавляет ТОЛЬКО `X-Flashbots-Signature`
+(`FlashbotProvider.get_request_headers()` — не читает `request_kwargs`,
+проверено чтением исходника, не предположение) — здесь `_AuthedFlashbotProvider`
+переопределяет именно этот метод, чтобы домешать `Authorization: <ключ>`.
+Общий случай bearer-токена; relay с другой схемой авторизации (не
+`Authorization`-заголовок) сюда не впишутся без доработки.
 
 ponytail: пакет `flashbots` на pip оборачивает только синхронный Web3 (async-клиента
 нет), поэтому здесь внутри используется обычный синхронный Web3 через
@@ -27,7 +32,8 @@ asyncio.to_thread, а не попытка протащить async-поддер�
 import asyncio
 
 from eth_account.signers.local import LocalAccount
-from flashbots import flashbot
+from flashbots import Flashbots, attach_modules, construct_flashbots_middleware, flashbot
+from flashbots.provider import FlashbotProvider
 from web3 import HTTPProvider, Web3
 
 from wakefinder.common.interfaces import Bundle, BundleSender
@@ -35,13 +41,44 @@ from wakefinder.common.interfaces import Bundle, BundleSender
 DEFAULT_RELAY_URLS = ["https://relay.flashbots.net"]
 
 
+class _AuthedFlashbotProvider(FlashbotProvider):
+    """FlashbotProvider домешивает только X-Flashbots-Signature
+    (get_request_headers() не читает request_kwargs — проверено чтением
+    исходника пакета flashbots, см. docstring модуля) — здесь добавляем
+    Authorization для relay, которым этого недостаточно."""
+
+    def __init__(self, signature_account: LocalAccount, endpoint_uri: str, api_key: str):
+        super().__init__(signature_account, endpoint_uri)
+        self._api_key = api_key
+
+    def get_request_headers(self) -> dict:
+        return {**super().get_request_headers(), "Authorization": self._api_key}
+
+
+def _flashbot_client(rpc_url: str, signer_account: LocalAccount, relay_url: str, api_key: str) -> Web3:
+    w3 = Web3(HTTPProvider(rpc_url))
+    if not api_key:
+        flashbot(w3, signer_account, relay_url)
+        return w3
+    # Тот же монтаж, что flashbot() делает внутри, только с authed-провайдером —
+    # flashbot() сам такой провайдер не принимает (только endpoint_uri).
+    provider = _AuthedFlashbotProvider(signer_account, relay_url, api_key)
+    w3.middleware_onion.add(construct_flashbots_middleware(provider))
+    attach_modules(w3, {"flashbots": (Flashbots,)})
+    return w3
+
+
 class FlashbotsBundleSender(BundleSender):
-    def __init__(self, rpc_url: str, signer_account: LocalAccount, relay_urls: list[str] | None = None):
-        self._clients: list[Web3] = []
-        for relay_url in (relay_urls or DEFAULT_RELAY_URLS):
-            w3 = Web3(HTTPProvider(rpc_url))
-            flashbot(w3, signer_account, relay_url)
-            self._clients.append(w3)
+    def __init__(
+        self, rpc_url: str, signer_account: LocalAccount, relay_urls: list[str] | None = None,
+        relay_api_keys: list[str] | None = None,
+    ):
+        urls = relay_urls or DEFAULT_RELAY_URLS
+        keys = (relay_api_keys or []) + [""] * len(urls)  # короче списка URL -> остальным пусто, см. docstring config.py
+        self._clients: list[Web3] = [
+            _flashbot_client(rpc_url, signer_account, relay_url, api_key)
+            for relay_url, api_key in zip(urls, keys)
+        ]
 
     def _simulate_sync(self, raw_txs: list[str], target_block: int) -> dict:
         fb_bundle = [{"signed_transaction": raw} for raw in raw_txs]

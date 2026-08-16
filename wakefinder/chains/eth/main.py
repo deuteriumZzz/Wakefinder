@@ -204,6 +204,9 @@ async def run(
             rpc_url=settings.eth_rpc_http_url.get_secret_value(),
             signer_account=fb_signer,
             relay_urls=[u.strip() for u in settings.eth_relay_urls.split(",") if u.strip()],
+            # ПОЗИЦИОННО к relay_urls — пустая строка на позиции ≠ "пропустить",
+            # значит "для ЭТОГО relay без доп. авторизации" (см. docstring config.py).
+            relay_api_keys=[k.strip() for k in settings.eth_relay_api_keys.split(",")],
         )
 
         watch_streams = [(lambda w=watcher: with_reconnect(w.watch)) for watcher in watchers]

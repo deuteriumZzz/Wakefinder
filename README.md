@@ -433,9 +433,16 @@ Solana сознательно не реализован тем же способ
 - **Мульти-relay отправка** (ETH): `ETH_RELAY_URLS` — один и тот же
   подписанный бандл уходит параллельно во все настроенные relay (у каждого
   свой набор builder'ов, поэтому это реально увеличивает шанс попасть в
-  блок). Дефолт — только Flashbots. Другие relay могут требовать свою
-  авторизацию (API-ключ/заголовок), которая здесь не реализована — годятся
-  только relay, принимающие `eth_sendBundle` так же, как Flashbots.
+  блок). Дефолт — только Flashbots.
+- **Авторизация non-Flashbots relay** (bloXroute, Eden и т.п.):
+  `ETH_RELAY_API_KEYS` — ПОЗИЦИОННО к `ETH_RELAY_URLS` (пустая позиция =
+  для этого конкретного relay без авторизации, Flashbots и так работает
+  без неё). Отправляется как заголовок `Authorization: <ключ>` —
+  `flashbots`-пакет сам добавляет только `X-Flashbots-Signature`
+  (`chains/eth/sender.py:_AuthedFlashbotProvider` домешивает второй
+  заголовок). Общий случай bearer-токена — relay с другой схемой
+  авторизации (не заголовок `Authorization`) потребуют доработки
+  `sender.py`.
 - **Гонка RPC-провайдеров** (обе сети, `wakefinder/common/race.py`):
   `ETH_RPC_WS_URLS` / `SOLANA_RPC_WS_URLS` — дополнительные WS-провайдеры
   сверх основного `*_RPC_WS_URL`, каждый со своим watcher'ом (`UniswapV2Watcher`
