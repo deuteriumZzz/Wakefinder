@@ -28,6 +28,7 @@ from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from spl.token.instructions import get_associated_token_address
 
+from wakefinder import live_config
 from wakefinder.chains.solana.main import _build_tip_tx, _sign_unsigned_tx, _tip_lamports
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.wallet_watcher import WalletSwapWatcher
@@ -185,11 +186,22 @@ async def run(
     sender = JitoBundleSender(settings.jito_block_engine_url, keypair)
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
 
+    # Мутируемые копии — живой конфиг (wakefinder/live_config.py) обновляет
+    # ИХ ЖЕ объекты in place. ВАЖНО: WalletSwapWatcher читает watched_wallets
+    # только ОДИН РАЗ в начале watch() (per-wallet logs_subscribe) — новый
+    # кошелёк реально подпишется только на следующем реконнекте, не сразу на
+    # следующем опросе (честное ограничение, см. docstring live_config.py).
+    watched_wallets = {a.lower() for a in watched_wallets}
+    token_allowlist = {a.lower() for a in token_allowlist}
+    token_denylist = {a.lower() for a in token_denylist}
+    live_config.seed_if_missing(settings.live_config_file, watched_wallets, token_allowlist, token_denylist)
+
     positions = _load_positions(settings.solana_copytrade_positions_file)
     positions_lock = asyncio.Lock()
     consensus = ConsensusTracker(settings.copytrade_min_consensus_wallets, settings.copytrade_consensus_window_seconds)
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     last_drawdown_check = 0.0
+    last_live_config_check = 0.0
 
     ws_urls = [settings.solana_rpc_ws_url.get_secret_value()]
     ws_urls += [u.strip() for u in settings.solana_rpc_ws_urls.split(",") if u.strip()]
@@ -238,6 +250,21 @@ async def run(
                     )
                     killswitch.engage(settings.kill_switch_file, "drawdown breach: solana copytrade")
                     return
+
+            if now - last_live_config_check >= settings.live_config_check_interval_seconds:
+                last_live_config_check = now
+                live = live_config.load_live_config(settings.live_config_file)
+                if live_config.sync_set(watched_wallets, live["watched_wallets"]):
+                    for w in watchers:
+                        live_config.sync_set(w.watched_wallets, live["watched_wallets"])
+                    logger.info("live-конфиг: watched_wallets обновлены (%d, подпишется на следующем реконнекте)", len(watched_wallets))
+                if live_config.sync_set(token_allowlist, live["token_allowlist"]):
+                    logger.info("live-конфиг: token_allowlist обновлён (%d)", len(token_allowlist))
+                if live_config.sync_set(token_denylist, live["token_denylist"]):
+                    logger.info("live-конфиг: token_denylist обновлён (%d)", len(token_denylist))
+                applied = live_config.apply_risk_overrides_live(settings, live["risk"])
+                if applied:
+                    logger.info("live-конфиг: risk-параметры обновлены: %s", applied)
 
             if token_allowlist and swap.token_out.lower() not in {t.lower() for t in token_allowlist}:
                 continue

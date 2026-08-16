@@ -88,6 +88,19 @@ def apply_kill_switch_override(profile: dict) -> None:
         logger.info("профильный kill switch: %s", profile["kill_switch_file"])
 
 
+def apply_live_config_override(profile: dict) -> None:
+    """Опционально: свой live_config.json на ЭТОТ профиль (см.
+    wakefinder/live_config.py). По умолчанию ОБЩИЙ файл на все процессы —
+    то же допущение, что и у kill_switch_file. В отличие от kill switch
+    (где "общий на все" — осознанная цель), для watched_wallets/allowlist/
+    denylist/risk это обычно НЕ то, что нужно при нескольких одновременно
+    запущенных стратегиях — задайте разные live_config_file в профилях,
+    если запускаете больше одного профиля одновременно."""
+    if "live_config_file" in profile:
+        os.environ["LIVE_CONFIG_FILE"] = profile["live_config_file"]
+        logger.info("профильный live_config: %s", profile["live_config_file"])
+
+
 def _pool_registry_from_profile(profile: dict) -> dict[tuple[str, str], str]:
     """[[pools]] с полями token_in/token_out/pool -> {(token_in, token_out): pool}
     (формат, который ожидает chains/eth/main.py:run())."""
@@ -167,6 +180,7 @@ async def run_profile(path: str) -> None:
     profile = load_profile(path)
     apply_risk_overrides(profile)
     apply_kill_switch_override(profile)
+    apply_live_config_override(profile)
 
     chain = profile["chain"]
     strategy = profile["strategy"]

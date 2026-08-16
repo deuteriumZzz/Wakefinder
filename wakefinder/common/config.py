@@ -149,6 +149,22 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_chat_id: str = ""  # не секрет сам по себе (не даёт доступа ни к чему без токена)
 
+    # Telegram MiniApp (wakefinder/telegram_auth.py, /telegram в web.py) —
+    # числовой Telegram user_id владельца, единственного, кому разрешено
+    # управлять ботом через MiniApp. Подпись initData доказывает "запрос от
+    # Telegram для этого user_id", НЕ "этому user_id можно управлять ботом" —
+    # это отдельная проверка. Пусто по умолчанию = MiniApp-эндпоинты
+    # отклоняют вообще все запросы (безопасный дефолт, не "открыто всем").
+    telegram_allowed_user_id: str = ""
+
+    # Живой конфиг (wakefinder/live_config.py) — файл, который дашборд/
+    # MiniApp правят, а торговые процессы периодически перечитывают (тот же
+    # принцип, что kill switch: единственный работающий канал между
+    # разными процессами без общей памяти). "Динамически" = на следующем
+    # опросе, не мгновенно в тот же тик.
+    live_config_file: str = "live_config.json"
+    live_config_check_interval_seconds: float = 10
+
     # Портфельный circuit breaker по РЕАЛИЗОВАННОЙ просадке за скользящее
     # окно, агрегированной по всем стратегиям одной сети (arb + copytrade
     # вместе) — независим от MAX_CONSECUTIVE_FAILURES, который ловит только

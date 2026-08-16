@@ -47,6 +47,7 @@ from dataclasses import asdict, dataclass
 from eth_account import Account
 from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
+from wakefinder import live_config
 from wakefinder.chains.eth.abi import PAIR_ABI, ROUTER_ABI
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
 from wakefinder.common import heartbeat, killswitch, trade_log
@@ -269,11 +270,19 @@ async def run(
     settings = get_settings()
     account = Account.from_key(settings.resolved_eth_private_key())
 
+    # Мутируемые копии — живой конфиг (см. wakefinder/live_config.py)
+    # обновляет ИХ ЖЕ объекты in place на каждом опросе, не пересоздаёт.
+    watched_wallets = {a.lower() for a in watched_wallets}
+    token_allowlist = {a.lower() for a in token_allowlist}
+    token_denylist = {a.lower() for a in token_denylist}
+    live_config.seed_if_missing(settings.live_config_file, watched_wallets, token_allowlist, token_denylist)
+
     positions = _load_positions(settings.copytrade_positions_file)
     positions_lock = asyncio.Lock()
     consensus = ConsensusTracker(settings.copytrade_min_consensus_wallets, settings.copytrade_consensus_window_seconds)
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     last_drawdown_check = 0.0
+    last_live_config_check = 0.0
 
     # Основной WS-провайдер + опциональные дополнительные для гонки за
     # обнаружение pending-tx кита (см. common/race.py и ту же заметку в
@@ -340,6 +349,21 @@ async def run(
                         )
                         killswitch.engage(settings.kill_switch_file, "drawdown breach: eth copytrade")
                         return
+
+                if now - last_live_config_check >= settings.live_config_check_interval_seconds:
+                    last_live_config_check = now
+                    live = live_config.load_live_config(settings.live_config_file)
+                    if live_config.sync_set(watched_wallets, live["watched_wallets"]):
+                        for w in watchers:
+                            live_config.sync_set(w.watched_wallets, live["watched_wallets"])
+                        logger.info("live-конфиг: watched_wallets обновлены (%d)", len(watched_wallets))
+                    if live_config.sync_set(token_allowlist, live["token_allowlist"]):
+                        logger.info("live-конфиг: token_allowlist обновлён (%d)", len(token_allowlist))
+                    if live_config.sync_set(token_denylist, live["token_denylist"]):
+                        logger.info("live-конфиг: token_denylist обновлён (%d)", len(token_denylist))
+                    applied = live_config.apply_risk_overrides_live(settings, live["risk"])
+                    if applied:
+                        logger.info("live-конфиг: risk-параметры обновлены: %s", applied)
 
                 if token_allowlist and swap.token_out.lower() not in {t.lower() for t in token_allowlist}:
                     continue

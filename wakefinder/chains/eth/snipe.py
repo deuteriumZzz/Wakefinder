@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass
 from eth_account import Account
 from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
+from wakefinder import live_config
 from wakefinder.chains.eth.abi import ERC20_ABI, ROUTER_ABI
 from wakefinder.chains.eth.pair_watcher import PairCreatedWatcher
 from wakefinder.chains.eth.snipe_filter import check_new_pool
@@ -222,11 +223,15 @@ async def run(factory_address: str | None = None, token_denylist: frozenset[str]
     settings = get_settings()
     account = Account.from_key(settings.resolved_eth_private_key())
 
+    token_denylist = {a.lower() for a in token_denylist}
+    live_config.seed_if_missing(settings.live_config_file, set(), set(), token_denylist)
+
     positions = _load_positions(settings.snipe_positions_file)
     positions_lock = asyncio.Lock()
     trackers: dict[str, TrailingStopTracker] = {}
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     last_drawdown_check = 0.0
+    last_live_config_check = 0.0
     test_amount_wei = Web3.to_wei(settings.snipe_test_amount_eth, "ether")
     min_liquidity_weth = Web3.to_wei(settings.snipe_min_liquidity_weth, "ether")
 
@@ -267,6 +272,17 @@ async def run(factory_address: str | None = None, token_denylist: frozenset[str]
                         )
                         killswitch.engage(settings.kill_switch_file, "drawdown breach: eth snipe")
                         return
+
+                if now - last_live_config_check >= settings.live_config_check_interval_seconds:
+                    last_live_config_check = now
+                    live = live_config.load_live_config(settings.live_config_file)
+                    if live_config.sync_set(token_denylist, live["token_denylist"]):
+                        logger.info("live-конфиг: token_denylist обновлён (%d)", len(token_denylist))
+                    applied = live_config.apply_risk_overrides_live(settings, live["risk"])
+                    if applied:
+                        logger.info("live-конфиг: risk-параметры обновлены: %s", applied)
+                        test_amount_wei = Web3.to_wei(settings.snipe_test_amount_eth, "ether")
+                        min_liquidity_weth = Web3.to_wei(settings.snipe_min_liquidity_weth, "ether")
 
                 async with positions_lock:
                     at_capacity = len(positions) >= settings.snipe_max_concurrent_positions

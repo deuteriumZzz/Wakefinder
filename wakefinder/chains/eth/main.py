@@ -43,6 +43,7 @@ from contextlib import AsyncExitStack
 from eth_account import Account
 from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
+from wakefinder import live_config
 from wakefinder.chains.eth.abi import ERC20_ABI, ROUTER_ABI
 from wakefinder.chains.eth.sender import FlashbotsBundleSender
 from wakefinder.chains.eth.simulator import GAS_LIMIT, KNOWN_DEX_FACTORIES, TwoPoolArbSimulator
@@ -165,6 +166,14 @@ async def run(
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     consecutive_failures = 0
     last_drawdown_check = 0.0
+    last_live_config_check = 0.0
+
+    # watched_wallets — единственное здесь с реальным рантайм-эффектом (влияет
+    # на factory-фолбэк watcher'а); allowlist/denylist для арбитража проверяются
+    # ОДИН РАЗ при старте против фиксированного набора пулов (см. выше) — живое
+    # изменение их не имело бы эффекта, поэтому не применяется в этом цикле.
+    watched_wallets = {a.lower() for a in watched_wallets}
+    live_config.seed_if_missing(settings.live_config_file, watched_wallets, token_allowlist, token_denylist)
     heartbeat_path = os.path.join(settings.heartbeat_dir, "eth_arb.heartbeat")
     heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
@@ -221,6 +230,17 @@ async def run(
                     killswitch.engage(settings.kill_switch_file, "drawdown breach: eth arb")
                     heartbeat_task.cancel()
                     return
+
+            if now - last_live_config_check >= settings.live_config_check_interval_seconds:
+                last_live_config_check = now
+                live = live_config.load_live_config(settings.live_config_file)
+                if live_config.sync_set(watched_wallets, live["watched_wallets"]):
+                    for w in watchers:
+                        live_config.sync_set(w.watched_wallets, live["watched_wallets"])
+                    logger.info("live-конфиг: watched_wallets обновлены (%d)", len(watched_wallets))
+                applied = live_config.apply_risk_overrides_live(settings, live["risk"])
+                if applied:
+                    logger.info("live-конфиг: risk-параметры обновлены: %s", applied)
 
             sim = await simulator.simulate(swap)
             if not sim.profitable:

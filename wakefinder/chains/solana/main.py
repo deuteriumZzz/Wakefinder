@@ -34,6 +34,7 @@ from solders.system_program import TransferParams, transfer
 from solders.transaction import VersionedTransaction
 from spl.token.instructions import get_associated_token_address
 
+from wakefinder import live_config
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.simulator import TwoPoolArbSimulator
 from wakefinder.chains.solana.watcher import RaydiumVaultWatcher
@@ -129,6 +130,8 @@ async def run(
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     consecutive_failures = 0
     last_drawdown_check = 0.0
+    last_live_config_check = 0.0
+    live_config.seed_if_missing(settings.live_config_file, set(), token_allowlist, token_denylist)
     heartbeat_path = os.path.join(settings.heartbeat_dir, "solana_arb.heartbeat")
     heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
@@ -156,6 +159,13 @@ async def run(
                 killswitch.engage(settings.kill_switch_file, "drawdown breach: solana arb")
                 heartbeat_task.cancel()
                 return
+
+        if now - last_live_config_check >= settings.live_config_check_interval_seconds:
+            last_live_config_check = now
+            live = live_config.load_live_config(settings.live_config_file)
+            applied = live_config.apply_risk_overrides_live(settings, live["risk"])
+            if applied:
+                logger.info("live-конфиг: risk-параметры обновлены: %s", applied)
 
         sim = await simulator.simulate(swap)
         if not sim.profitable:
