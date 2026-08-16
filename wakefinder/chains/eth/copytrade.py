@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import time
+from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass
 
 from eth_account import Account
@@ -56,6 +57,7 @@ from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.position_sizing import win_rate_size_multiplier
+from wakefinder.common.race import race_watchers
 from wakefinder.common.reconnect import with_reconnect
 from wakefinder.common.wallet_stats import compute_wallet_stats
 
@@ -273,13 +275,27 @@ async def run(
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     last_drawdown_check = 0.0
 
-    provider = WebsocketProviderV2(settings.eth_rpc_ws_url.get_secret_value())
-    async with AsyncWeb3.persistent_websocket(provider) as w3:
+    # Основной WS-провайдер + опциональные дополнительные для гонки за
+    # обнаружение pending-tx кита (см. common/race.py и ту же заметку в
+    # chains/eth/main.py) — здесь особенно важно: копитрейд и так уже
+    # оптимизирован под скорость входа, гонка провайдеров — тот же принцип.
+    ws_urls = [settings.eth_rpc_ws_url.get_secret_value()]
+    ws_urls += [u.strip() for u in settings.eth_rpc_ws_urls.split(",") if u.strip()]
+
+    async with AsyncExitStack() as stack:
+        w3_connections = [
+            await stack.enter_async_context(AsyncWeb3.persistent_websocket(WebsocketProviderV2(url)))
+            for url in ws_urls
+        ]
+        w3 = w3_connections[0]
         chain_id = await w3.eth.chain_id
-        watcher = UniswapV2Watcher(
-            w3, settings.eth_router_address, pool_registry={}, min_amount_in=2**256 - 1,
-            watched_wallets=watched_wallets, factory_address=settings.eth_factory_address,
-        )
+        watchers = [
+            UniswapV2Watcher(
+                conn, settings.eth_router_address, pool_registry={}, min_amount_in=2**256 - 1,
+                watched_wallets=watched_wallets, factory_address=settings.eth_factory_address,
+            )
+            for conn in w3_connections
+        ]
 
         stop_loss_task = asyncio.create_task(
             _stop_loss_loop(
@@ -291,8 +307,9 @@ async def run(
         heartbeat_path = os.path.join(settings.heartbeat_dir, "eth_copytrade.heartbeat")
         heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
+        watch_streams = [(lambda w=watcher: with_reconnect(w.watch)) for watcher in watchers]
         try:
-            async for swap in with_reconnect(watcher.watch):
+            async for swap in race_watchers(watch_streams):
                 if killswitch.is_engaged(settings.kill_switch_file):
                     logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
                     send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, "[wakefinder/eth copytrade] kill switch присутствует — бот остановлен")

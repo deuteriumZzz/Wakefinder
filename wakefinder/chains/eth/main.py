@@ -38,6 +38,7 @@ import asyncio
 import logging
 import os
 import time
+from contextlib import AsyncExitStack
 
 from eth_account import Account
 from web3 import AsyncWeb3, Web3, WebsocketProviderV2
@@ -52,6 +53,7 @@ from wakefinder.common.canary import CanaryController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.allowlist import validate_not_denylisted, validate_token_allowlist
+from wakefinder.common.race import race_watchers
 from wakefinder.common.reconciliation import realized_profit_from_balances
 from wakefinder.common.config import get_settings
 from wakefinder.common.interfaces import Bundle, PendingSwap, SimResult
@@ -166,10 +168,25 @@ async def run(
     heartbeat_path = os.path.join(settings.heartbeat_dir, "eth_arb.heartbeat")
     heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
-    provider = WebsocketProviderV2(settings.eth_rpc_ws_url.get_secret_value())
-    async with AsyncWeb3.persistent_websocket(provider) as w3:
+    # Основной WS-провайдер + опциональные дополнительные для гонки за
+    # обнаружение pending-tx (см. common/race.py) — каждому провайдеру своё
+    # соединение и своё автопереподключение, симуляция/баланс/отправка идут
+    # только через ПЕРВОЕ (основное) соединение, гонка касается только
+    # обнаружения свопа, не остального пайплайна.
+    ws_urls = [settings.eth_rpc_ws_url.get_secret_value()]
+    ws_urls += [u.strip() for u in settings.eth_rpc_ws_urls.split(",") if u.strip()]
+
+    async with AsyncExitStack() as stack:
+        w3_connections = [
+            await stack.enter_async_context(AsyncWeb3.persistent_websocket(WebsocketProviderV2(url)))
+            for url in ws_urls
+        ]
+        w3 = w3_connections[0]
         chain_id = await w3.eth.chain_id
-        watcher = UniswapV2Watcher(w3, settings.eth_router_address, pool_registry, min_amount_in, watched_wallets)
+        watchers = [
+            UniswapV2Watcher(conn, settings.eth_router_address, pool_registry, min_amount_in, watched_wallets)
+            for conn in w3_connections
+        ]
         simulator = TwoPoolArbSimulator(
             w3, settings.eth_router_address, reference_pools, settings.eth_weth_address,
             auto_discover_factories=KNOWN_DEX_FACTORIES if settings.eth_auto_discover_reference_pools else None,
@@ -180,7 +197,8 @@ async def run(
             relay_urls=[u.strip() for u in settings.eth_relay_urls.split(",") if u.strip()],
         )
 
-        async for swap in with_reconnect(watcher.watch):
+        watch_streams = [(lambda w=watcher: with_reconnect(w.watch)) for watcher in watchers]
+        async for swap in race_watchers(watch_streams):
             if killswitch.is_engaged(settings.kill_switch_file):
                 logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
                 send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, "[wakefinder/eth arb] kill switch присутствует — бот остановлен")

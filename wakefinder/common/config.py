@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     # должен слить его в stdout/логи.
     eth_rpc_ws_url: SecretStr
     eth_rpc_http_url: SecretStr
+    # Доп. WS-провайдеры через запятую — гонка за обнаружение pending-tx
+    # (см. common/race.py): несколько узлов видят мемпул с разной задержкой,
+    # первый увидевший конкретный tx "выигрывает". ETH_RPC_WS_URL выше всегда
+    # используется как основной (для симуляции/отправки), это — ДОПОЛНИТЕЛЬНЫЕ
+    # источники именно для watcher'а. Пусто по умолчанию — гонка выключена,
+    # поведение как раньше (один провайдер).
+    eth_rpc_ws_urls: str = ""
     eth_router_address: str = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"  # Uniswap V2 Router02
     eth_weth_address: str = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
     # Список MEV-relay через запятую — один и тот же бандл уходит параллельно
