@@ -45,6 +45,7 @@ from wakefinder.common.allowlist import validate_not_denylisted, validate_token_
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
+from wakefinder.common.race import race_watchers
 from wakefinder.common.reconciliation import realized_profit_from_balances
 from wakefinder.common.reconnect import with_reconnect
 
@@ -119,7 +120,9 @@ async def run(
     client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
     jupiter = Jupiter(client, keypair)
 
-    watcher = RaydiumVaultWatcher(settings.solana_rpc_ws_url.get_secret_value(), pools, min_amount_in)
+    ws_urls = [settings.solana_rpc_ws_url.get_secret_value()]
+    ws_urls += [u.strip() for u in settings.solana_rpc_ws_urls.split(",") if u.strip()]
+    watchers = [RaydiumVaultWatcher(url, pools, min_amount_in) for url in ws_urls]
     simulator = TwoPoolArbSimulator(client, reference_pools, settings.solana_wsol_address, jupiter)
     sender = JitoBundleSender(settings.jito_block_engine_url, keypair)
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
@@ -129,7 +132,8 @@ async def run(
     heartbeat_path = os.path.join(settings.heartbeat_dir, "solana_arb.heartbeat")
     heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
-    async for swap in with_reconnect(watcher.watch):
+    watch_streams = [(lambda w=watcher: with_reconnect(w.watch)) for watcher in watchers]
+    async for swap in race_watchers(watch_streams):
         if killswitch.is_engaged(settings.kill_switch_file):
             logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
             send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, "[wakefinder/solana arb] kill switch присутствует — бот остановлен")

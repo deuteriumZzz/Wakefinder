@@ -40,6 +40,7 @@ from wakefinder.common.consensus import ConsensusTracker
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
 from wakefinder.common.position_sizing import win_rate_size_multiplier
+from wakefinder.common.race import race_watchers
 from wakefinder.common.reconnect import with_reconnect
 from wakefinder.common.wallet_stats import compute_wallet_stats
 
@@ -190,7 +191,9 @@ async def run(
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     last_drawdown_check = 0.0
 
-    watcher = WalletSwapWatcher(settings.solana_rpc_ws_url.get_secret_value(), client, watched_wallets)
+    ws_urls = [settings.solana_rpc_ws_url.get_secret_value()]
+    ws_urls += [u.strip() for u in settings.solana_rpc_ws_urls.split(",") if u.strip()]
+    watchers = [WalletSwapWatcher(url, client, watched_wallets) for url in ws_urls]
 
     stop_loss_task = asyncio.create_task(
         _stop_loss_loop(
@@ -202,8 +205,9 @@ async def run(
     heartbeat_path = os.path.join(settings.heartbeat_dir, "solana_copytrade.heartbeat")
     heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
+    watch_streams = [(lambda w=watcher: with_reconnect(w.watch)) for watcher in watchers]
     try:
-        async for swap in with_reconnect(watcher.watch):
+        async for swap in race_watchers(watch_streams):
             if killswitch.is_engaged(settings.kill_switch_file):
                 logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
                 send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, "[wakefinder/solana copytrade] kill switch присутствует — бот остановлен")

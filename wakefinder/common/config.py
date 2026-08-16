@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # solana_private_key — base58, отдельное keyspace от ETH-ключей, не
     # взаимозаменяемы в принципе (не тот же кошелёк технически невозможен).
     solana_rpc_ws_url: SecretStr | None = None
+    # Доп. WS-провайдеры через запятую — тот же принцип гонки, что и
+    # eth_rpc_ws_urls выше (см. common/race.py). SOLANA_RPC_WS_URL остаётся
+    # основным. Пусто по умолчанию — гонка выключена.
+    solana_rpc_ws_urls: str = ""
     solana_rpc_http_url: SecretStr | None = None
     solana_private_key: SecretStr | None = None
     solana_private_key_file: str | None = None
