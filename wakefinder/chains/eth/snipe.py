@@ -50,6 +50,7 @@ from wakefinder.common.momentum_confirmation import check_eth_pool_momentum
 from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.reconnect import with_reconnect
 from wakefinder.common.sandwich_detector import check_own_tx_for_sandwich
+from wakefinder.common.social_signal import check_twitter_mentions
 from wakefinder.common.stuck_position import StuckPositionTracker
 from wakefinder.common.trailing_stop import TrailingStopTracker
 from wakefinder.wallet_scanner import check_deployer_reputation
@@ -357,6 +358,14 @@ async def _handle_mined_candidate(
         )
         if not deployer_ok:
             logger.info("снайп отклонил пул=%s: деплойер похож на burner-кошелёк (мало истории на Etherscan)", pool.pool_address)
+            return
+
+    if settings.snipe_social_signal_check:
+        social = await check_twitter_mentions(
+            result.token, settings.twitter_bearer_token, settings.snipe_social_min_mentions, settings.snipe_social_window_minutes,
+        )
+        if not social.passed:
+            logger.info("снайп отклонил токен=%s: %s", result.token, social.reason)
             return
 
     balance = await w3.eth.get_balance(account.address)

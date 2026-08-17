@@ -46,6 +46,7 @@ from wakefinder.common.momentum_confirmation import check_solana_mint_momentum
 from wakefinder.common.race import race_watchers
 from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.reconnect import with_reconnect
+from wakefinder.common.social_signal import check_twitter_mentions
 from wakefinder.common.stuck_position import StuckPositionTracker
 from wakefinder.common.trailing_stop import TrailingStopTracker
 
@@ -274,6 +275,14 @@ async def run(token_denylist: frozenset[str] = frozenset()):
                 momentum = await check_solana_mint_momentum(client, new_mint.mint_address, settings.snipe_momentum_min_buys)
                 if not momentum.passed:
                     logger.info("снайп momentum-подтверждение отклонило mint=%s: %s", new_mint.mint_address, momentum.reason)
+                    continue
+
+            if settings.snipe_social_signal_check:
+                social = await check_twitter_mentions(
+                    new_mint.mint_address, settings.twitter_bearer_token, settings.snipe_social_min_mentions, settings.snipe_social_window_minutes,
+                )
+                if not social.passed:
+                    logger.info("снайп отклонил mint=%s: %s", new_mint.mint_address, social.reason)
                     continue
 
             balance = (await client.get_balance(keypair.pubkey())).value

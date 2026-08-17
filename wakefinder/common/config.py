@@ -183,6 +183,13 @@ class Settings(BaseSettings):
     etherscan_api_key: str = ""
     snipe_deployer_reputation_check: bool = False
     snipe_deployer_min_tx_count: int = Field(default=10, ge=1)
+    # Twitter-упоминания перед входом (common/social_signal.py) — требует
+    # ПЛАТНОГО тарифа Twitter API v2, самый слабый/gameable сигнал в
+    # проекте, см. docstring модуля. Пусто = проверка пропускается.
+    twitter_bearer_token: str = ""
+    snipe_social_signal_check: bool = False
+    snipe_social_min_mentions: int = Field(default=3, ge=1)
+    snipe_social_window_minutes: int = Field(default=15, ge=1)
     snipe_trailing_stop_check_interval_seconds: float = 15
     snipe_max_concurrent_positions: int = Field(default=3, ge=1)
     # Round-trip симуляция покупки+продажи через flashbots.simulate перед
