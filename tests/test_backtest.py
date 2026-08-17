@@ -109,6 +109,38 @@ def test_run_backtest_finds_opportunity_from_historical_swap_log():
     assert result.swaps_scanned == 1
     assert result.opportunities_found == 1
     assert result.total_simulated_profit_wei > 0
+    assert result.contested_opportunities == 0  # единственный своп в блоке — не "оживлённо"
+
+
+def test_run_backtest_flags_contested_opportunity_with_multiple_swaps_same_block():
+    weth = get_settings().eth_weth_address
+    token = "0xTOKEN"
+    target_pool = "0xTARGET"
+    ref_pool = "0xREF"
+
+    scale = 10**18
+    tx_hash_a = type("H", (), {"hex": lambda self: "0xaaa"})()
+    tx_hash_b = type("H", (), {"hex": lambda self: "0xbbb"})()
+    target = FakePoolContract(
+        target_pool, reserve0=1_000 * scale, reserve1=800 * scale, token0=weth, token1=token,
+        logs=[
+            {"transactionHash": tx_hash_a, "blockNumber": 105, "args": {"amount0In": 10 * scale, "amount1In": 0, "amount0Out": 0, "amount1Out": 0}},
+            {"transactionHash": tx_hash_b, "blockNumber": 105, "args": {"amount0In": 5 * scale, "amount1In": 0, "amount0Out": 0, "amount1Out": 0}},
+        ],
+    )
+    ref = FakePoolContract(ref_pool, reserve0=1_000 * scale, reserve1=1_000 * scale, token0=weth, token1=token, logs=[])
+
+    w3 = FakeW3(FakeEth({target_pool.lower(): target, ref_pool.lower(): ref}))
+
+    result = asyncio.run(run_backtest(
+        w3, target_router="0xTargetRouter",
+        reference_pools={target_pool.lower(): {"pool": ref_pool, "router": "0xRefRouter"}},
+        from_block=100, to_block=110,
+    ))
+
+    assert result.swaps_scanned == 2
+    assert result.opportunities_found == 2
+    assert result.contested_opportunities == 2  # оба свопа делят блок 105
 
 
 def test_run_backtest_respects_block_range():
@@ -141,5 +173,6 @@ def test_run_backtest_respects_block_range():
 
 if __name__ == "__main__":
     test_run_backtest_finds_opportunity_from_historical_swap_log()
+    test_run_backtest_flags_contested_opportunity_with_multiple_swaps_same_block()
     test_run_backtest_respects_block_range()
     print("ok")

@@ -18,6 +18,11 @@ accountSubscribe-уведомлений).
 Честные известные ограничения:
 - Глубина истории ограничена тем, что хранит конкретный RPC-провайдер (тот же
   класс ограничения, что chunk_size/getLogs-глубина у ETH-версии).
+- `contested_opportunities` (см. BacktestResult) — тот же грубый прокси
+  конкуренции, что в ETH-версии, только по слотам вместо блоков: сколько
+  прибыльных возможностей приходится на слот, где ЦЕЛЕВОЙ vault тронула
+  больше чем одна транзакция. НЕ число реальных конкурентов — платных
+  исторических данных о том, кто ещё отправлял бандлы, у публичных RPC нет.
 - Резервы РЕФЕРЕНСНОГО пула на момент каждого свопа цели реконструируются как
   "последняя транзакция этого пула не позже данного слота" — если референсный
   пул торговался редко, момент может быть заметно раньше по времени (тот же
@@ -52,6 +57,7 @@ class BacktestResult:
     swaps_scanned: int
     opportunities_found: int
     total_simulated_profit_lamports: int
+    contested_opportunities: int = 0  # см. docstring модуля — грубый прокси, не число реальных конкурентов
 
 
 def _resolve_balance(meta, account_keys: list[str], vault_address: str, field: str) -> int | None:
@@ -115,12 +121,20 @@ async def run_backtest(client: AsyncClient, reference_pools: dict[str, dict[str,
     scanned = 0
     found = 0
     total_profit = 0
+    contested = 0
 
     for ref in reference_pools.values():
         target_base_vault, target_quote_vault = ref["target_base_vault"], ref["target_quote_vault"]
         base_mint, quote_mint = ref["base_mint"], ref["quote_mint"]
 
         sigs_resp = await client.get_signatures_for_address(Pubkey.from_string(target_base_vault), limit=limit_per_pool)
+
+        # Сколько транзакций этого vault'а пришлось на каждый слот — прокси
+        # "оживлённости" слота, см. docstring модуля.
+        txs_per_slot: dict[int, int] = {}
+        for entry in sigs_resp.value:
+            txs_per_slot[entry.slot] = txs_per_slot.get(entry.slot, 0) + 1
+
         for entry in reversed(sigs_resp.value):  # от старых к новым — хронологический порядок
             swap = await _target_swap_from_tx(client, entry.signature, target_base_vault, target_quote_vault, base_mint, quote_mint)
             if swap is None:
@@ -152,8 +166,13 @@ async def run_backtest(client: AsyncClient, reference_pools: dict[str, dict[str,
             if profit > 0 and amount_in > 0:
                 found += 1
                 total_profit += profit
+                if txs_per_slot[entry.slot] > 1:
+                    contested += 1
 
-    return BacktestResult(swaps_scanned=scanned, opportunities_found=found, total_simulated_profit_lamports=total_profit)
+    return BacktestResult(
+        swaps_scanned=scanned, opportunities_found=found, total_simulated_profit_lamports=total_profit,
+        contested_opportunities=contested,
+    )
 
 
 async def _main() -> None:
@@ -170,6 +189,9 @@ async def _main() -> None:
     print(f"Просканировано свопов: {result.swaps_scanned}")
     print(f"Найдено возможностей: {result.opportunities_found}")
     print(f"Суммарная симулированная прибыль: {result.total_simulated_profit_lamports} lamports")
+    if result.opportunities_found:
+        pct = result.contested_opportunities / result.opportunities_found * 100
+        print(f"Из них с признаком конкуренции (несколько транзакций в слоте): {result.contested_opportunities} ({pct:.0f}%)")
 
 
 if __name__ == "__main__":

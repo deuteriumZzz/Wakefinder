@@ -13,6 +13,13 @@
 - НЕ учитывает конкуренцию с другими searcher-ботами за тот же блок —
   верхняя граница достижимой прибыли ("если бы этот бандл был единственной
   заявкой"), не гарантированный исторический результат.
+  `contested_opportunities` (см. BacktestResult) — ГРУБЫЙ прокси интенсивности
+  конкуренции: сколько прибыльных возможностей приходятся на блок, где
+  ЦЕЛЕВОЙ пул тронула больше чем одна Swap-транзакция. Это НЕ значит "N ботов
+  боролись за эту же возможность" — несколько независимых свопов в одном
+  пуле в одном блоке случаются и без всякой MEV-конкуренции. Честная нижняя
+  граница "здесь было оживлённо", не число реальных конкурентов — платных
+  исторических данных мемпула (кто ещё бидил) у публичных RPC нет.
 - Использует ТЕКУЩИЕ `MAX_GAS_GWEI`/`MIN_REFERENCE_LIQUIDITY_ETH`/т.п. из
   Settings, не исторические условия сети на момент каждого блока.
 
@@ -41,6 +48,7 @@ class BacktestResult:
     swaps_scanned: int
     opportunities_found: int
     total_simulated_profit_wei: int
+    contested_opportunities: int = 0  # см. docstring модуля — грубый прокси, не число реальных конкурентов
 
 
 async def run_backtest(
@@ -55,6 +63,7 @@ async def run_backtest(
     scanned = 0
     found = 0
     total_profit = 0
+    contested = 0
 
     for pool_address in reference_pools:
         pool = w3.eth.contract(address=pool_address, abi=PAIR_ABI)
@@ -65,6 +74,13 @@ async def run_backtest(
         while block <= to_block:
             chunk_end = min(block + chunk_size - 1, to_block)
             logs = await pool.events.Swap.get_logs(fromBlock=block, toBlock=chunk_end)
+
+            # Сколько Swap-логов этого пула пришлось на каждый блок — прокси
+            # "оживлённости" блока для этого пула, см. docstring модуля.
+            swaps_per_block: dict[int, int] = {}
+            for log in logs:
+                swaps_per_block[log["blockNumber"]] = swaps_per_block.get(log["blockNumber"], 0) + 1
+
             for log in logs:
                 scanned += 1
                 amount0_in = log["args"]["amount0In"]
@@ -88,10 +104,15 @@ async def run_backtest(
                 if sim.profitable:
                     found += 1
                     total_profit += sim.expected_profit_wei
+                    if swaps_per_block[log["blockNumber"]] > 1:
+                        contested += 1
 
             block = chunk_end + 1
 
-    return BacktestResult(swaps_scanned=scanned, opportunities_found=found, total_simulated_profit_wei=total_profit)
+    return BacktestResult(
+        swaps_scanned=scanned, opportunities_found=found, total_simulated_profit_wei=total_profit,
+        contested_opportunities=contested,
+    )
 
 
 async def _main() -> None:
@@ -111,6 +132,9 @@ async def _main() -> None:
     print(f"Просканировано свопов: {result.swaps_scanned}")
     print(f"Найдено возможностей: {result.opportunities_found}")
     print(f"Суммарная симулированная прибыль: {result.total_simulated_profit_wei} wei")
+    if result.opportunities_found:
+        pct = result.contested_opportunities / result.opportunities_found * 100
+        print(f"Из них с признаком конкуренции (несколько свопов в блоке): {result.contested_opportunities} ({pct:.0f}%)")
 
 
 if __name__ == "__main__":

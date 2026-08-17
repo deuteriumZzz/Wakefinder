@@ -69,16 +69,19 @@ class _Resp:
 
 
 class _SigEntry:
-    def __init__(self, signature):
+    def __init__(self, signature, slot=1):
         self.signature = signature
+        self.slot = slot
 
 
 class FakeAsyncClient:
-    def __init__(self, signatures: dict, transactions: dict):
+    def __init__(self, signatures: dict, transactions: dict, slots: dict | None = None):
         """signatures: {vault_address: [sig, ...]} (порядок — от новых к старым, как реальный RPC).
-        transactions: {sig: (meta, account_keys)}."""
+        transactions: {sig: (meta, account_keys)}. slots: {sig: slot}, по умолчанию 1 для всех —
+        нужен только тестам, которые проверяют contested_opportunities (см. ниже)."""
         self._signatures = signatures
         self._transactions = transactions
+        self._slots = slots or {}
 
     async def get_signatures_for_address(self, pubkey, before=None, limit=None):
         # Реальный RPC фильтрует по слоту/времени сигнатуры `before`, не по
@@ -89,7 +92,7 @@ class FakeAsyncClient:
         if before is not None and before in sigs:
             idx = sigs.index(before)
             sigs = sigs[idx + 1:]
-        return _Resp([_SigEntry(s) for s in sigs[:limit]])
+        return _Resp([_SigEntry(s, slot=self._slots.get(s, 1)) for s in sigs[:limit]])
 
     async def get_transaction(self, sig, encoding=None, max_supported_transaction_version=None):
         entry = self._transactions.get(sig)
@@ -132,6 +135,40 @@ def test_run_backtest_finds_opportunity_from_historical_swap():
     assert result.swaps_scanned == 1
     assert result.opportunities_found == 1
     assert result.total_simulated_profit_lamports > 0
+
+
+def test_run_backtest_flags_contested_opportunity_with_multiple_txs_same_slot():
+    keys = _account_keys()
+    target_meta_1 = _Meta(
+        pre=[_Balance(0, 1_000_000_000_000), _Balance(1, 800_000_000_000)],
+        post=[_Balance(0, 1_010_000_000_000), _Balance(1, 790_000_000_000)],
+    )
+    target_meta_2 = _Meta(
+        pre=[_Balance(0, 1_010_000_000_000), _Balance(1, 790_000_000_000)],
+        post=[_Balance(0, 1_020_000_000_000), _Balance(1, 780_000_000_000)],
+    )
+    ref_meta = _Meta(pre=[], post=[_Balance(2, 1_000_000_000_000), _Balance(3, 1_000_000_000_000)])
+
+    client = FakeAsyncClient(
+        signatures={TARGET_BASE: ["SIG1", "SIG2"], REF_BASE: ["REFSIG"]},
+        transactions={"SIG1": (target_meta_1, keys), "SIG2": (target_meta_2, keys), "REFSIG": (ref_meta, keys)},
+        slots={"SIG1": 5, "SIG2": 5},  # оба в одном слоте -> "оживлённо"
+    )
+
+    result = asyncio.run(run_backtest(
+        client,
+        reference_pools={
+            "pool1": {
+                "base_vault": REF_BASE, "quote_vault": REF_QUOTE,
+                "base_mint": BASE_MINT, "quote_mint": QUOTE_MINT,
+                "target_base_vault": TARGET_BASE, "target_quote_vault": TARGET_QUOTE,
+            },
+        },
+    ))
+
+    assert result.swaps_scanned == 2
+    assert result.opportunities_found == 2
+    assert result.contested_opportunities == 2
 
 
 def test_run_backtest_skips_non_swap_transaction():
@@ -189,6 +226,7 @@ def test_run_backtest_skips_swap_without_reference_history():
 
 if __name__ == "__main__":
     test_run_backtest_finds_opportunity_from_historical_swap()
+    test_run_backtest_flags_contested_opportunity_with_multiple_txs_same_slot()
     test_run_backtest_skips_non_swap_transaction()
     test_run_backtest_skips_swap_without_reference_history()
     print("ok")
