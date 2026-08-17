@@ -31,7 +31,7 @@ from spl.token.instructions import get_associated_token_address
 from wakefinder import live_config
 from wakefinder.chains.solana.main import _build_tip_tx, _sign_unsigned_tx, _tip_lamports
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
-from wakefinder.chains.solana.wallet_watcher import WalletSwapWatcher
+from wakefinder.chains.solana.wallet_watcher import SUBSCRIPTION_SYNC_INTERVAL_SECONDS, WalletSwapWatcher
 from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
@@ -196,10 +196,9 @@ async def run(
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
 
     # Мутируемые копии — живой конфиг (wakefinder/live_config.py) обновляет
-    # ИХ ЖЕ объекты in place. ВАЖНО: WalletSwapWatcher читает watched_wallets
-    # только ОДИН РАЗ в начале watch() (per-wallet logs_subscribe) — новый
-    # кошелёк реально подпишется только на следующем реконнекте, не сразу на
-    # следующем опросе (честное ограничение, см. docstring live_config.py).
+    # ИХ ЖЕ объекты in place. WalletSwapWatcher.watch() сам периодически
+    # сверяет self.watched_wallets и до/отписывается без реконнекта (см.
+    # SUBSCRIPTION_SYNC_INTERVAL_SECONDS в wallet_watcher.py).
     watched_wallets = {a.lower() for a in watched_wallets}
     token_allowlist = {a.lower() for a in token_allowlist}
     token_denylist = {a.lower() for a in token_denylist}
@@ -266,7 +265,7 @@ async def run(
                 if live_config.sync_set(watched_wallets, live["watched_wallets"]):
                     for w in watchers:
                         live_config.sync_set(w.watched_wallets, live["watched_wallets"])
-                    logger.info("live-конфиг: watched_wallets обновлены (%d, подпишется на следующем реконнекте)", len(watched_wallets))
+                    logger.info("live-конфиг: watched_wallets обновлены (%d, подписки на изменение обновятся в течение %d с без реконнекта)", len(watched_wallets), SUBSCRIPTION_SYNC_INTERVAL_SECONDS)
                 if live_config.sync_set(token_allowlist, live["token_allowlist"]):
                     logger.info("live-конфиг: token_allowlist обновлён (%d)", len(token_allowlist))
                 if live_config.sync_set(token_denylist, live["token_denylist"]):

@@ -33,12 +33,21 @@ from wakefinder.common.interfaces import MempoolWatcher, PendingSwap
 
 FETCH_RETRIES = 5
 FETCH_RETRY_DELAY_SECONDS = 0.2
+# Как часто проверять self.watched_wallets на изменения, если тихо (нет
+# новых logs-уведомлений) — при активном потоке проверка идёт после КАЖДОГО
+# полученного батча сообщений (дёшево — просто сравнение множеств), это
+# только верхняя граница задержки в отсутствие трафика.
+SUBSCRIPTION_SYNC_INTERVAL_SECONDS = 5
 
 
 class WalletSwapWatcher(MempoolWatcher):
     def __init__(self, ws_url: str, client: AsyncClient, watched_wallets: frozenset[str]):
         self.ws_url = ws_url
         self.client = client
+        # ВАЖНО: тот же объект (не копия) — live_config.sync_set мутирует его
+        # in place, watch() ниже сам обнаруживает изменения и до/отписывается,
+        # без реконнекта (см. docstring модуля и copytrade.py, где это
+        # заводится).
         self.watched_wallets = watched_wallets
 
     async def _fetch_transaction(self, signature):
@@ -55,17 +64,35 @@ class WalletSwapWatcher(MempoolWatcher):
                 await asyncio.sleep(FETCH_RETRY_DELAY_SECONDS)
         return None
 
+    async def _sync_subscriptions(self, ws, sub_ids: dict[int, str]) -> None:
+        """Дописывает/отписывает logs_subscribe под ТЕКУЩЕЕ содержимое
+        self.watched_wallets — вызывается периодически из watch(), чтобы
+        live-конфиг применялся без реконнекта (см. docstring модуля)."""
+        target = set(self.watched_wallets)
+        current = set(sub_ids.values())
+        for wallet in target - current:
+            await ws.logs_subscribe(
+                RpcTransactionLogsFilterMentions(Pubkey.from_string(wallet)), commitment=Processed
+            )
+            first = await ws.recv()
+            sub_ids[first[0].result] = wallet
+        for sub_id, wallet in list(sub_ids.items()):
+            if wallet not in target:
+                await ws.logs_unsubscribe(sub_id)
+                del sub_ids[sub_id]
+
     async def watch(self) -> AsyncIterator[PendingSwap]:
         async with connect(self.ws_url) as ws:
             sub_ids: dict[int, str] = {}
-            for wallet in self.watched_wallets:
-                await ws.logs_subscribe(
-                    RpcTransactionLogsFilterMentions(Pubkey.from_string(wallet)), commitment=Processed
-                )
-                first = await ws.recv()
-                sub_ids[first[0].result] = wallet
+            await self._sync_subscriptions(ws, sub_ids)
 
-            async for messages in ws:
+            while True:
+                try:
+                    messages = await asyncio.wait_for(ws.recv(), timeout=SUBSCRIPTION_SYNC_INTERVAL_SECONDS)
+                except asyncio.TimeoutError:
+                    await self._sync_subscriptions(ws, sub_ids)
+                    continue
+
                 for msg in messages:
                     wallet = sub_ids.get(msg.subscription)
                     if wallet is None:
@@ -117,3 +144,5 @@ class WalletSwapWatcher(MempoolWatcher):
                         amount_in=amount_in,
                         sender=wallet,
                     )
+
+                await self._sync_subscriptions(ws, sub_ids)
