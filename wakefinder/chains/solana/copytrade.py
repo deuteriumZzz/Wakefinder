@@ -41,6 +41,7 @@ from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
+from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.position_sizing import win_rate_size_multiplier
 from wakefinder.common.race import race_watchers
 from wakefinder.common.reconnect import with_reconnect
@@ -208,6 +209,31 @@ async def _stop_loss_loop(
                 await _exit_position(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, trade_log_file, token, "стоп-лосс")
 
 
+async def _reconcile_positions_startup(client: AsyncClient, owner: Pubkey, positions: dict[str, Position], settings) -> None:
+    """См. eth/copytrade.py:_reconcile_positions_startup — тот же принцип,
+    баланс SPL-токена — через ATA (тот же путь, что и _has_sufficient_balance)."""
+    if not positions:
+        return
+    balances: dict[str, int] = {}
+    for token in positions:
+        ata = get_associated_token_address(owner, Pubkey.from_string(token))
+        try:
+            resp = await client.get_token_account_balance(ata)
+            balances[token] = int(resp.value.amount)
+        except Exception as exc:
+            logger.warning("не удалось проверить баланс токена %s при старте (%s)", token, type(exc).__name__)
+    recorded = {token: pos.amount_held for token, pos in positions.items()}
+    mismatches = find_mismatches(recorded, balances)
+    if not mismatches:
+        return
+    lines = "; ".join(f"{m.token}: записано {m.recorded_amount}, на кошельке {m.actual_balance}" for m in mismatches)
+    logger.warning("расхождение positions.json с on-chain балансом при старте: %s", lines)
+    send_telegram_alert(
+        settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
+        f"[wakefinder/solana copytrade] расхождение positions.json с реальным балансом при старте — проверьте вручную: {lines}",
+    )
+
+
 async def run(
     watched_wallets: frozenset[str],
     token_allowlist: frozenset[str] = frozenset(),
@@ -236,6 +262,7 @@ async def run(
     live_config.seed_if_missing(settings.live_config_file, watched_wallets, token_allowlist, token_denylist)
 
     positions = _load_positions(settings.solana_copytrade_positions_file)
+    await _reconcile_positions_startup(client, keypair.pubkey(), positions, settings)
     positions_lock = asyncio.Lock()
     stuck_tracker = StuckPositionTracker(settings.stuck_position_threshold)
     consensus = ConsensusTracker(settings.copytrade_min_consensus_wallets, settings.copytrade_consensus_window_seconds)

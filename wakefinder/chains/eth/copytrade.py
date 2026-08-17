@@ -48,7 +48,7 @@ from eth_account import Account
 from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
 from wakefinder import live_config
-from wakefinder.chains.eth.abi import PAIR_ABI, ROUTER_ABI
+from wakefinder.chains.eth.abi import ERC20_ABI, PAIR_ABI, ROUTER_ABI
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
 from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wallet_lock
 from wakefinder.common.alerts import send_telegram_alert
@@ -58,6 +58,7 @@ from wakefinder.common.canary import CanaryController
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
 from wakefinder.common.drawdown import check_drawdown
+from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.position_sizing import win_rate_size_multiplier
 from wakefinder.common.race import race_watchers
 from wakefinder.common.reconnect import with_reconnect
@@ -308,6 +309,31 @@ async def _stop_loss_loop(
                 await _exit_position(w3, account, router_address, chain_id, token, "стоп-лосс", positions, positions_lock, positions_file, trade_log_file)
 
 
+async def _reconcile_positions_startup(w3: AsyncWeb3, account_address: str, positions: dict[str, Position], settings) -> None:
+    """При старте (после падения/рестарта) сверяем то, что записано в
+    positions.json, с тем, что РЕАЛЬНО на кошельке — см. docstring
+    common/position_reconciliation.py про честную границу этой проверки."""
+    if not positions:
+        return
+    balances: dict[str, int] = {}
+    for token in positions:
+        try:
+            erc20 = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
+            balances[token] = await erc20.functions.balanceOf(account_address).call()
+        except Exception as exc:
+            logger.warning("не удалось проверить баланс токена %s при старте (%s)", token, type(exc).__name__)
+    recorded = {token: pos.amount_held for token, pos in positions.items()}
+    mismatches = find_mismatches(recorded, balances)
+    if not mismatches:
+        return
+    lines = "; ".join(f"{m.token}: записано {m.recorded_amount}, на кошельке {m.actual_balance}" for m in mismatches)
+    logger.warning("расхождение positions.json с on-chain балансом при старте: %s", lines)
+    send_telegram_alert(
+        settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
+        f"[wakefinder/eth copytrade] расхождение positions.json с реальным балансом при старте — проверьте вручную: {lines}",
+    )
+
+
 async def run(
     watched_wallets: frozenset[str],
     token_allowlist: frozenset[str] = frozenset(),
@@ -346,6 +372,7 @@ async def run(
         ]
         w3 = w3_connections[0]
         chain_id = await w3.eth.chain_id
+        await _reconcile_positions_startup(w3, account.address, positions, settings)
         watchers = [
             UniswapV2Watcher(
                 conn, settings.eth_router_address, pool_registry={}, min_amount_in=2**256 - 1,

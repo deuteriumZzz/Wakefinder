@@ -27,6 +27,8 @@ from dataclasses import asdict, dataclass
 from jupiter_python_sdk.jupiter import Jupiter
 from solana.rpc.async_api import AsyncClient
 from solders.keypair import Keypair
+from solders.pubkey import Pubkey
+from spl.token.instructions import get_associated_token_address
 
 from wakefinder import live_config
 from wakefinder.chains.solana.copytrade import _swap_via_jupiter_and_send
@@ -41,6 +43,7 @@ from wakefinder.common.exposure import total_token_exposure_solana
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.race import race_watchers
+from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.reconnect import with_reconnect
 from wakefinder.common.stuck_position import StuckPositionTracker
 from wakefinder.common.trailing_stop import TrailingStopTracker
@@ -151,6 +154,30 @@ async def _trailing_stop_loop(
                 trackers.pop(mint, None)
 
 
+async def _reconcile_positions_startup(client: AsyncClient, owner: Pubkey, positions: dict[str, SnipePosition], settings) -> None:
+    """См. solana/copytrade.py:_reconcile_positions_startup — тот же принцип."""
+    if not positions:
+        return
+    balances: dict[str, int] = {}
+    for mint in positions:
+        ata = get_associated_token_address(owner, Pubkey.from_string(mint))
+        try:
+            resp = await client.get_token_account_balance(ata)
+            balances[mint] = int(resp.value.amount)
+        except Exception as exc:
+            logger.warning("не удалось проверить баланс минта %s при старте (%s)", mint, type(exc).__name__)
+    recorded = {mint: pos.amount_held for mint, pos in positions.items()}
+    mismatches = find_mismatches(recorded, balances)
+    if not mismatches:
+        return
+    lines = "; ".join(f"{m.token}: записано {m.recorded_amount}, на кошельке {m.actual_balance}" for m in mismatches)
+    logger.warning("расхождение positions.json с on-chain балансом при старте: %s", lines)
+    send_telegram_alert(
+        settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
+        f"[wakefinder/solana snipe] расхождение positions.json с реальным балансом при старте — проверьте вручную: {lines}",
+    )
+
+
 async def run(token_denylist: frozenset[str] = frozenset()):
     settings = get_settings()
     if not (settings.solana_rpc_ws_url and settings.solana_rpc_http_url and (settings.solana_private_key or settings.solana_private_key_file)):
@@ -169,6 +196,7 @@ async def run(token_denylist: frozenset[str] = frozenset()):
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
 
     positions = _load_positions(settings.solana_snipe_positions_file)
+    await _reconcile_positions_startup(client, keypair.pubkey(), positions, settings)
     positions_lock = asyncio.Lock()
     trackers: dict[str, TrailingStopTracker] = {}
     stuck_tracker = StuckPositionTracker(settings.stuck_position_threshold)

@@ -46,6 +46,7 @@ from wakefinder.common.canary import CanaryController
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
+from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.reconnect import with_reconnect
 from wakefinder.common.stuck_position import StuckPositionTracker
 from wakefinder.common.trailing_stop import TrailingStopTracker
@@ -347,15 +348,24 @@ async def _handle_mined_candidate(
     if not included:
         return
 
-    await _approve(w3, account, settings.eth_router_address, chain_id, result.token)
-
+    # Позиция сохраняется СРАЗУ после подтверждённой покупки, ДО _approve —
+    # approve это отдельная RPC-транзакция (сетевой round-trip), и если
+    # процесс упадёт во время неё, позиция должна остаться отслеживаемой
+    # (иначе она молча выпадает из stop-loss/дашборда/exposure-лимитов, см.
+    # README "Reconciliation после краша/рестарта").
     async with positions_lock:
         positions[result.token] = SnipePosition(
             token=result.token, pool_address=pool.pool_address, amount_held=bought_amount,
-            entry_amount_in_wei=amount_in, opened_at=time.time(), approved=True,
+            entry_amount_in_wei=amount_in, opened_at=time.time(), approved=False,
         )
         trackers[result.token] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct)
         _save_positions(settings.snipe_positions_file, positions)
+
+    await _approve(w3, account, settings.eth_router_address, chain_id, result.token)
+    async with positions_lock:
+        if result.token in positions:
+            positions[result.token].approved = True
+            _save_positions(settings.snipe_positions_file, positions)
 
 
 async def _handle_backrun_candidate(
@@ -425,15 +435,43 @@ async def _handle_backrun_candidate(
     if not included:
         return
 
-    await _approve(w3, account, settings.eth_router_address, chain_id, token)
-
+    # См. заметку про порядок save/_approve в _handle_mined_candidate выше.
     async with positions_lock:
         positions[token] = SnipePosition(
             token=token, pool_address="", amount_held=bought_amount,
-            entry_amount_in_wei=amount_in, opened_at=time.time(), approved=True,
+            entry_amount_in_wei=amount_in, opened_at=time.time(), approved=False,
         )
         trackers[token] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct)
         _save_positions(settings.snipe_positions_file, positions)
+
+    await _approve(w3, account, settings.eth_router_address, chain_id, token)
+    async with positions_lock:
+        if token in positions:
+            positions[token].approved = True
+            _save_positions(settings.snipe_positions_file, positions)
+
+
+async def _reconcile_positions_startup(w3: AsyncWeb3, account_address: str, positions: dict[str, SnipePosition], settings) -> None:
+    """См. eth/copytrade.py:_reconcile_positions_startup — тот же принцип."""
+    if not positions:
+        return
+    balances: dict[str, int] = {}
+    for token in positions:
+        try:
+            erc20 = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
+            balances[token] = await erc20.functions.balanceOf(account_address).call()
+        except Exception as exc:
+            logger.warning("не удалось проверить баланс токена %s при старте (%s)", token, type(exc).__name__)
+    recorded = {token: pos.amount_held for token, pos in positions.items()}
+    mismatches = find_mismatches(recorded, balances)
+    if not mismatches:
+        return
+    lines = "; ".join(f"{m.token}: записано {m.recorded_amount}, на кошельке {m.actual_balance}" for m in mismatches)
+    logger.warning("расхождение positions.json с on-chain балансом при старте: %s", lines)
+    send_telegram_alert(
+        settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
+        f"[wakefinder/eth snipe] расхождение positions.json с реальным балансом при старте — проверьте вручную: {lines}",
+    )
 
 
 async def run(factory_address: str | None = None, token_denylist: frozenset[str] = frozenset()):
@@ -463,6 +501,7 @@ async def run(factory_address: str | None = None, token_denylist: frozenset[str]
     async with AsyncExitStack() as stack:
         w3 = await stack.enter_async_context(AsyncWeb3.persistent_websocket(WebsocketProviderV2(settings.eth_rpc_ws_url.get_secret_value())))
         chain_id = await w3.eth.chain_id
+        await _reconcile_positions_startup(w3, account.address, positions, settings)
         watcher = (
             LiquidityAddWatcher(w3, settings.eth_router_address, min_liquidity_weth)
             if settings.snipe_backrun_mode
