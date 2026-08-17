@@ -46,7 +46,7 @@ FETCH_RETRY_DELAY_SECONDS = 0.2
 INITIALIZE_MINT_TYPES = ("initializeMint", "initializeMint2")
 
 
-class NewMintWatcher(MempoolWatcher):
+class NewMintWatcher(MempoolWatcher[NewMint]):
     def __init__(self, ws_url: str, client: AsyncClient):
         self.ws_url = ws_url
         self.client = client

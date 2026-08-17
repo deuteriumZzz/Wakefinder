@@ -2,6 +2,20 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import Generic, Protocol, TypeVar
+
+
+class HasTxHash(Protocol):
+    """Общий контракт для всего, что common/race.py умеет ставить в гонку
+    между провайдерами — PendingSwap/NewPool/PendingLiquidityAdd/NewMint не
+    имеют общего базового класса (разные по смыслу события), но race_watchers
+    трогает только .tx_hash для дедупликации, так что Protocol честнее
+    искусственной общей иерархии наследования."""
+
+    tx_hash: str
+
+
+TxHashEvent = TypeVar("TxHashEvent", bound=HasTxHash)
 
 
 @dataclass
@@ -93,10 +107,13 @@ class Bundle:
     target_block: int
 
 
-class MempoolWatcher(ABC):
+class MempoolWatcher(ABC, Generic[TxHashEvent]):
     @abstractmethod
-    async def watch(self) -> AsyncIterator[PendingSwap]:
-        """Отдаёт расшифрованные свопы китов по мере появления в мемпуле."""
+    async def watch(self) -> AsyncIterator[TxHashEvent]:
+        """Отдаёт расшифрованные события по мере появления в мемпуле — тип
+        события специфичен подклассу (PendingSwap/NewPool/PendingLiquidityAdd/
+        NewMint), см. TxHashEvent выше."""
+        yield None  # type: ignore[misc]  # pragma: no cover -- никогда не исполняется (@abstractmethod), нужен только чтобы mypy распознал сигнатуру как async generator, а не coroutine
 
 
 class Simulator(ABC):

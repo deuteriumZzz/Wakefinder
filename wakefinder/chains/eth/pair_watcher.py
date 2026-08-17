@@ -20,7 +20,7 @@ from wakefinder.chains.eth.abi import FACTORY_ABI
 from wakefinder.common.interfaces import MempoolWatcher, NewPool
 
 
-class PairCreatedWatcher(MempoolWatcher):
+class PairCreatedWatcher(MempoolWatcher[NewPool]):
     def __init__(self, w3: AsyncWeb3, factory_address: str):
         self.w3 = w3
         self.factory = w3.eth.contract(address=factory_address, abi=FACTORY_ABI)

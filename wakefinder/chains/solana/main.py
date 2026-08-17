@@ -117,7 +117,9 @@ async def run(
             "Solana-путь не может стартовать без них"
         )
 
-    keypair = Keypair.from_base58_string(settings.resolved_solana_private_key())
+    solana_private_key = settings.resolved_solana_private_key()
+    assert solana_private_key is not None  # гарантировано проверкой выше — здесь только для mypy
+    keypair = Keypair.from_base58_string(solana_private_key)
     _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, str(keypair.pubkey()), "solana_arb")
     client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
     jupiter = Jupiter(client, keypair)

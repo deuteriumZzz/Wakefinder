@@ -44,7 +44,7 @@ from wakefinder.cli import _RISK_ENV_MAP
 
 RISK_KEYS = frozenset(_RISK_ENV_MAP.keys())
 
-DEFAULT_LIVE_CONFIG = {
+DEFAULT_LIVE_CONFIG: dict[str, object] = {
     "watched_wallets": [],
     "token_allowlist": [],
     "token_denylist": [],

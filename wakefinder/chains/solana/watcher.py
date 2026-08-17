@@ -37,7 +37,7 @@ from wakefinder.common.interfaces import MempoolWatcher, PendingSwap
 SUBSCRIPTION_SYNC_INTERVAL_SECONDS = 5
 
 
-class RaydiumVaultWatcher(MempoolWatcher):
+class RaydiumVaultWatcher(MempoolWatcher[PendingSwap]):
     def __init__(
         self,
         ws_url: str,

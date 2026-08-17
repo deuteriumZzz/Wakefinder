@@ -29,7 +29,7 @@ SWAP_FUNCTIONS = {"swapExactTokensForTokens", "swapExactETHForTokens"}
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
-class UniswapV2Watcher(MempoolWatcher):
+class UniswapV2Watcher(MempoolWatcher[PendingSwap]):
     def __init__(
         self,
         w3: AsyncWeb3,

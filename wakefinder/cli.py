@@ -156,6 +156,8 @@ async def run_discover(args) -> None:
 
         from wakefinder.wallet_scanner import find_candidate_wallets_solana
 
+        if settings.solana_rpc_http_url is None:
+            raise RuntimeError("SOLANA_RPC_HTTP_URL не задан — discover для Solana не может стартовать без него")
         async with AsyncClient(settings.solana_rpc_http_url.get_secret_value()) as client:
             counts = await find_candidate_wallets_solana(client, args.pools, limit=args.limit)
         ranked = counts.most_common()

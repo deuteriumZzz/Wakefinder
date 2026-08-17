@@ -134,7 +134,9 @@ async def run(token_denylist: frozenset[str] = frozenset()):
     token_denylist = {a.lower() for a in token_denylist}
     live_config.seed_if_missing(settings.live_config_file, set(), set(), token_denylist)
 
-    keypair = Keypair.from_base58_string(settings.resolved_solana_private_key())
+    solana_private_key = settings.resolved_solana_private_key()
+    assert solana_private_key is not None  # гарантировано проверкой выше — здесь только для mypy
+    keypair = Keypair.from_base58_string(solana_private_key)
     _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, str(keypair.pubkey()), "solana_snipe")
     client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
     jupiter = Jupiter(client, keypair)

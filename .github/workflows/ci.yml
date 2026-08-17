@@ -17,8 +17,13 @@ jobs:
       - run: pip install --upgrade pip setuptools
       - run: pip install -e ".[dev,web]"
       # tests/test_fork_integration.py форкает публичный RPC (см. FORK_RPC_URL
-      # в файле) — если сеть недоступна из раннера, тесты сами skip'аются, не failed.
-      - run: python -m pytest tests/ -q
+      # в файле) через anvil (устанавливается шагом foundry-toolchain выше) —
+      # если сеть недоступна из раннера, тесты сами skip'аются, не failed.
+      # -rs делает причину skip'а видимой в логе CI (просто "3 skipped" без
+      # -rs легко принять за "всё ок", когда на самом деле форк-тест вообще
+      # не выполнился ни разу).
+      - run: python -m pytest tests/ -q -rs
       - run: python -m py_compile $(find wakefinder -name "*.py")
       - run: ruff check wakefinder tests
+      - run: mypy wakefinder --config-file pyproject.toml
       - run: pip install pip-audit && pip-audit --skip-editable

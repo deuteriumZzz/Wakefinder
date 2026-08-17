@@ -277,17 +277,25 @@ class Settings(BaseSettings):
         return self
 
     def resolved_eth_private_key(self) -> str:
+        # _check_key_sources ниже гарантирует ровно один источник и
+        # wallet_key_passphrase при любом *_key_file — mypy не видит связь
+        # между validator'ом и этим методом, assert только для него.
         if self.eth_private_key_file:
+            assert self.wallet_key_passphrase is not None
             return decrypt_from_file(self.eth_private_key_file, self.wallet_key_passphrase.get_secret_value())
+        assert self.eth_private_key is not None
         return self.eth_private_key.get_secret_value()
 
     def resolved_flashbots_signer_key(self) -> str:
         if self.flashbots_signer_key_file:
+            assert self.wallet_key_passphrase is not None
             return decrypt_from_file(self.flashbots_signer_key_file, self.wallet_key_passphrase.get_secret_value())
+        assert self.flashbots_signer_key is not None
         return self.flashbots_signer_key.get_secret_value()
 
     def resolved_solana_private_key(self) -> str | None:
         if self.solana_private_key_file:
+            assert self.wallet_key_passphrase is not None
             return decrypt_from_file(self.solana_private_key_file, self.wallet_key_passphrase.get_secret_value())
         return self.solana_private_key.get_secret_value() if self.solana_private_key else None
 

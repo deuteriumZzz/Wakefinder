@@ -40,7 +40,7 @@ FETCH_RETRY_DELAY_SECONDS = 0.2
 SUBSCRIPTION_SYNC_INTERVAL_SECONDS = 5
 
 
-class WalletSwapWatcher(MempoolWatcher):
+class WalletSwapWatcher(MempoolWatcher[PendingSwap]):
     def __init__(self, ws_url: str, client: AsyncClient, watched_wallets: frozenset[str]):
         self.ws_url = ws_url
         self.client = client

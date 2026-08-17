@@ -188,7 +188,7 @@ async def _try_enter(
         )
         if wallet_stats else 1.0
     )
-    if multiplier != 1.0:
+    if wallet_stats and multiplier != 1.0:  # wallet_stats всегда truthy здесь (иначе multiplier == 1.0) — доп. проверка только для mypy
         logger.info("win-rate множитель размера для %s: %.2fx (win_rate=%.0f%%, сделок=%d)", watched_wallet, multiplier, wallet_stats.win_rate * 100, wallet_stats.exits)
 
     # ponytail: тот же приём, что и в арбитраже — предполагаем token_in 18-decimal (WETH)

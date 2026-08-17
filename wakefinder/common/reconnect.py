@@ -14,10 +14,14 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 
+from wakefinder.common.interfaces import TxHashEvent
+
 logger = logging.getLogger("wakefinder.reconnect")
 
 
-async def with_reconnect(make_iterator: Callable[[], AsyncIterator], max_backoff_seconds: float = 60.0) -> AsyncIterator:
+async def with_reconnect(
+    make_iterator: Callable[[], AsyncIterator[TxHashEvent]], max_backoff_seconds: float = 60.0
+) -> AsyncIterator[TxHashEvent]:
     backoff = 1.0
     while True:
         try:

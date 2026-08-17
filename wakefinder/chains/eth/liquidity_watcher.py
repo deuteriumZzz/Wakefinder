@@ -27,7 +27,7 @@ from wakefinder.chains.eth.abi import ROUTER_ABI
 from wakefinder.common.interfaces import MempoolWatcher, PendingLiquidityAdd
 
 
-class LiquidityAddWatcher(MempoolWatcher):
+class LiquidityAddWatcher(MempoolWatcher[PendingLiquidityAdd]):
     def __init__(self, w3: AsyncWeb3, router_address: str, min_amount_eth: int):
         self.w3 = w3
         self.router = w3.eth.contract(address=router_address, abi=ROUTER_ABI)

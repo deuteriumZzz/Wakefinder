@@ -189,7 +189,9 @@ async def run(
     if not (settings.solana_rpc_ws_url and settings.solana_rpc_http_url and (settings.solana_private_key or settings.solana_private_key_file)):
         raise RuntimeError("SOLANA_RPC_WS_URL / SOLANA_RPC_HTTP_URL / SOLANA_PRIVATE_KEY(_FILE) не настроены")
 
-    keypair = Keypair.from_base58_string(settings.resolved_solana_private_key())
+    solana_private_key = settings.resolved_solana_private_key()
+    assert solana_private_key is not None  # гарантировано проверкой выше — здесь только для mypy
+    keypair = Keypair.from_base58_string(solana_private_key)
     _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, str(keypair.pubkey()), "solana_copytrade")
     client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
     jupiter = Jupiter(client, keypair)
@@ -312,7 +314,7 @@ async def run(
                 )
                 if wallet_stats else 1.0
             )
-            if multiplier != 1.0:
+            if wallet_stats and multiplier != 1.0:  # wallet_stats всегда truthy здесь (иначе multiplier == 1.0) — доп. проверка только для mypy
                 logger.info("win-rate множитель размера для %s: %.2fx (win_rate=%.0f%%, сделок=%d)", swap.sender, multiplier, wallet_stats.win_rate * 100, wallet_stats.exits)
 
             amount_in = int(balance * settings.copytrade_size_pct * multiplier / 100)

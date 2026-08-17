@@ -19,7 +19,7 @@ tx_hash, "выигрывает" гонку, повторное появлени�
 import asyncio
 from collections.abc import AsyncIterator, Callable
 
-from wakefinder.common.interfaces import PendingSwap
+from wakefinder.common.interfaces import TxHashEvent
 
 # ponytail: простой guard от неограниченного роста множества, не LRU —
 # для процесса, который периодически перезапускают, полная очистка раз в
@@ -28,8 +28,8 @@ DEFAULT_MAX_SEEN = 50_000
 
 
 async def race_watchers(
-    make_iterators: list[Callable[[], AsyncIterator[PendingSwap]]], max_seen: int = DEFAULT_MAX_SEEN,
-) -> AsyncIterator[PendingSwap]:
+    make_iterators: list[Callable[[], AsyncIterator[TxHashEvent]]], max_seen: int = DEFAULT_MAX_SEEN,
+) -> AsyncIterator[TxHashEvent]:
     if len(make_iterators) == 1:
         # Один провайдер -> гонка не нужна, отдаём поток как есть без
         # накладных расходов на очередь/дедуп-множество.
@@ -37,10 +37,10 @@ async def race_watchers(
             yield swap
         return
 
-    queue: asyncio.Queue[PendingSwap] = asyncio.Queue()
+    queue: asyncio.Queue[TxHashEvent] = asyncio.Queue()
     seen: set[str] = set()
 
-    async def _pump(make_iterator: Callable[[], AsyncIterator[PendingSwap]]) -> None:
+    async def _pump(make_iterator: Callable[[], AsyncIterator[TxHashEvent]]) -> None:
         async for swap in make_iterator():
             await queue.put(swap)
 

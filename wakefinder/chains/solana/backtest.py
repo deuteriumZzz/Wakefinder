@@ -84,7 +84,9 @@ async def _target_swap_from_tx(client: AsyncClient, sig: Signature, base_vault: 
     pre_quote = _resolve_balance(meta, account_keys, quote_vault, "pre_token_balances")
     post_base = _resolve_balance(meta, account_keys, base_vault, "post_token_balances")
     post_quote = _resolve_balance(meta, account_keys, quote_vault, "post_token_balances")
-    if None in (pre_base, pre_quote, post_base, post_quote):
+    # `is None` (не `None in (...)`) — mypy сужает тип по первому, не по
+    # второму, тот же результат в рантайме, но следующие строки типятся верно.
+    if pre_base is None or pre_quote is None or post_base is None or post_quote is None:
         return None
 
     delta_base = post_base - pre_base
@@ -181,6 +183,8 @@ async def _main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
+    if settings.solana_rpc_http_url is None:
+        raise RuntimeError("SOLANA_RPC_HTTP_URL не задан — бэктест Solana не может стартовать без него")
     client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
     try:
         result = await run_backtest(client, reference_pools={}, limit_per_pool=args.limit_per_pool)
