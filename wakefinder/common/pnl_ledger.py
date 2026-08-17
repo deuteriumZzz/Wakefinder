@@ -6,11 +6,14 @@ trade_log.jsonl, где entry/exit копитрейдинга/снайпинга
 совпадают; сюда просто дублируется как "закрытая сделка" для единого
 представления). Пишется только когда сделка реально включилась в блок —
 без include ни entry, ни exit не дают настоящих чисел (см. общий принцип
-"не оценка, а честный факт" в trade_log.py)."""
+"не оценка, а честный факт" в trade_log.py). Часть hash-chain
+(common/hash_chain.py) — см. его docstring."""
 
 import json
 import os
 import time
+
+from wakefinder.common.hash_chain import append_chained
 
 
 def record_closed_trade(
@@ -31,8 +34,7 @@ def record_closed_trade(
         "realized_pnl": realized_pnl,
         "holding_seconds": (time.time() - opened_at) if opened_at is not None else None,
     }
-    with open(path, "a") as f:
-        f.write(json.dumps(record) + "\n")
+    append_chained(path, record)
 
 
 def read_closed_trades(path: str, chain: str | None = None, limit: int = 1000) -> list[dict]:

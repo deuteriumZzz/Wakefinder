@@ -239,6 +239,9 @@ def main() -> None:
     discover_parser.add_argument("--top", type=int, default=20, help="сколько кандидатов показать")
     discover_parser.add_argument("--etherscan-api-key", default="", help="опциональный фильтр по активности кошелька (ETH)")
 
+    verify_parser = subparsers.add_parser("verify-log", help="проверить hash-chain trade_log.jsonl/pnl_ledger.jsonl на признаки подделки задним числом")
+    verify_parser.add_argument("path", help="путь к JSONL-файлу (trade_log.jsonl или pnl_ledger.jsonl)")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -249,6 +252,15 @@ def main() -> None:
         if args.chain == "eth" and (args.from_block is None or args.to_block is None):
             parser.error("discover --chain eth требует --from-block и --to-block")
         asyncio.run(run_discover(args))
+    elif args.command == "verify-log":
+        from wakefinder.common.hash_chain import verify_chain
+
+        valid, broken_at = verify_chain(args.path)
+        if valid:
+            print(f"OK: {args.path} — hash-chain цела, признаков подделки задним числом не найдено")
+        else:
+            print(f"НАРУШЕНА ЦЕПОЧКА: {args.path}, строка {broken_at} — запись отредактирована/удалена/переставлена задним числом")
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

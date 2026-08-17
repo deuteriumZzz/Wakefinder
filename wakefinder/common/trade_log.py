@@ -3,10 +3,15 @@
 фактическая разница баланса token_in до/после, снятая ПОСТФАКТУМ после
 подтверждения включения. Не защищено от гонок с остальной активностью того
 же кошелька в промежутке (та же честная оговорка, что и раньше) — снимки
-баланса, не индивидуальный трейс переводов."""
+баланса, не индивидуальный трейс переводов.
 
-import json
+Каждая запись — часть hash-chain (common/hash_chain.py) — правка/удаление
+задним числом любой строки обнаружима через hash_chain.verify_chain(path),
+не предотвращается (см. его docstring про честную границу)."""
+
 import time
+
+from wakefinder.common.hash_chain import append_chained
 
 
 def log_attempt(
@@ -39,5 +44,4 @@ def log_attempt(
         # (exit триггерится нашим же trailing-stop/live-config опросом, не
         # внешним событием, "задержка реакции" там не определена так же).
         record["latency_ms"] = latency_ms
-    with open(path, "a") as f:
-        f.write(json.dumps(record) + "\n")
+    append_chained(path, record)
