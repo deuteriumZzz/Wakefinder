@@ -36,6 +36,7 @@ from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wall
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.canary import CanaryController
+from wakefinder.common.exposure import total_token_exposure_solana
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
 from wakefinder.common.drawdown import check_drawdown
@@ -329,6 +330,16 @@ async def run(
                 continue
             if not await _has_sufficient_balance(client, keypair.pubkey(), swap.token_in, amount_in):
                 continue
+
+            if settings.max_token_exposure_sol is not None:
+                cross_strategy_exposure = total_token_exposure_solana(swap.token_out, settings)
+                cap_lamports = int(settings.max_token_exposure_sol * 10**9)
+                if cross_strategy_exposure + amount_in > cap_lamports:
+                    logger.info(
+                        "пропуск входа: суммарная экспозиция по токену %s через ВСЕ стратегии %d + новый вход %d превысили бы кэп %d",
+                        swap.token_out, cross_strategy_exposure, amount_in, cap_lamports,
+                    )
+                    continue
 
             latency_ms = (time.time() - swap.detected_at) * 1000
             included, amount_out = await _swap_via_jupiter_and_send(

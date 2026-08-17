@@ -217,6 +217,14 @@ class Settings(BaseSettings):
     drawdown_window_seconds: float = 86_400  # 24 часа
     drawdown_check_interval_seconds: float = 300  # throttle — полное сканирование trade_log на каждой проверке
 
+    # Лимит СУММАРНОЙ экспозиции по одному токену через РАЗНЫЕ стратегии
+    # (copytrade+snipe вместе, см. common/exposure.py) — None (по умолчанию)
+    # значит выключено: копитрейд и снайпинг обычно на разных кошельках,
+    # включайте осознанно, если хотите ограничить суммарный риск на токен
+    # НЕЗАВИСИМО от того, какая стратегия/кошелёк его набрал.
+    max_token_exposure_eth: float | None = None
+    max_token_exposure_sol: float | None = None
+
     # Минимальная ликвидность референсного пула (в единицах token_in — см.
     # ponytail-заметку в simulator.py про допущение token_in≈WETH/wSOL) —
     # тонкий референсный пул дёшево сдвинуть в том же блоке/слоте, что и

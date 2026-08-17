@@ -41,6 +41,7 @@ from wakefinder.chains.eth.snipe_filter import check_backrun_sellable, check_new
 from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wallet_lock
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.amm import get_amount_out
+from wakefinder.common.exposure import total_token_exposure_eth
 from wakefinder.common.canary import CanaryController
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
@@ -303,6 +304,16 @@ async def _handle_mined_candidate(
     if amount_in <= 0:
         return
 
+    if settings.max_token_exposure_eth is not None:
+        cross_strategy_exposure = total_token_exposure_eth(result.token, settings)
+        cap_wei = int(settings.max_token_exposure_eth * 10**18)
+        if cross_strategy_exposure + amount_in > cap_wei:
+            logger.info(
+                "пропуск входа: суммарная экспозиция по токену %s через ВСЕ стратегии %d + новый вход %d превысили бы кэп %d",
+                result.token, cross_strategy_exposure, amount_in, cap_wei,
+            )
+            return
+
     latency_ms = (time.time() - pool.detected_at) * 1000
     included, tx_hash, bought_amount = await _buy(
         w3, account, settings.eth_router_address, chain_id, settings.eth_weth_address, result.token, amount_in,
@@ -369,6 +380,16 @@ async def _handle_backrun_candidate(
     amount_in = int(balance * settings.snipe_size_pct / 100)
     if amount_in <= 0:
         return
+
+    if settings.max_token_exposure_eth is not None:
+        cross_strategy_exposure = total_token_exposure_eth(token, settings)
+        cap_wei = int(settings.max_token_exposure_eth * 10**18)
+        if cross_strategy_exposure + amount_in > cap_wei:
+            logger.info(
+                "пропуск backrun-входа: суммарная экспозиция по токену %s через ВСЕ стратегии %d + новый вход %d превысили бы кэп %d",
+                token, cross_strategy_exposure, amount_in, cap_wei,
+            )
+            return
 
     latency_ms = (time.time() - pending.detected_at) * 1000
     included, tx_hash, bought_amount = await _buy_backrun(

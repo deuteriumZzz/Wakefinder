@@ -37,6 +37,7 @@ from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wall
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.canary import CanaryController
+from wakefinder.common.exposure import total_token_exposure_solana
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.race import race_watchers
@@ -219,6 +220,16 @@ async def run(token_denylist: frozenset[str] = frozenset()):
             amount_in = int(balance * settings.snipe_size_pct / 100)
             if amount_in <= 0:
                 continue
+
+            if settings.max_token_exposure_sol is not None:
+                cross_strategy_exposure = total_token_exposure_solana(new_mint.mint_address, settings)
+                cap_lamports = int(settings.max_token_exposure_sol * 10**9)
+                if cross_strategy_exposure + amount_in > cap_lamports:
+                    logger.info(
+                        "пропуск входа: суммарная экспозиция по mint=%s через ВСЕ стратегии %d + новый вход %d превысили бы кэп %d",
+                        new_mint.mint_address, cross_strategy_exposure, amount_in, cap_lamports,
+                    )
+                    continue
 
             latency_ms = (time.time() - new_mint.detected_at) * 1000
             included, bought_amount = await _swap_via_jupiter_and_send(

@@ -53,6 +53,7 @@ from wakefinder.chains.eth.watcher import UniswapV2Watcher
 from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wallet_lock
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.amm import get_amount_out
+from wakefinder.common.exposure import total_token_exposure_eth
 from wakefinder.common.canary import CanaryController
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
@@ -202,6 +203,16 @@ async def _try_enter(
         return
     if amount_in <= 0:
         return
+
+    if settings.max_token_exposure_eth is not None:
+        cross_strategy_exposure = total_token_exposure_eth(token_out, settings)
+        cap_wei = int(settings.max_token_exposure_eth * 10**18)
+        if cross_strategy_exposure + amount_in > cap_wei:
+            logger.info(
+                "пропуск входа: суммарная экспозиция по токену %s через ВСЕ стратегии %d + новый вход %d превысили бы кэп %d",
+                token_out, cross_strategy_exposure, amount_in, cap_wei,
+            )
+            return
 
     reserve_in, reserve_out = await _reserves(w3, pool_address, token_in)
     expected_out = get_amount_out(amount_in, reserve_in, reserve_out)
