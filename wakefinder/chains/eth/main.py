@@ -168,12 +168,16 @@ async def run(
     last_drawdown_check = 0.0
     last_live_config_check = 0.0
 
-    # watched_wallets — единственное здесь с реальным рантайм-эффектом (влияет
-    # на factory-фолбэк watcher'а); allowlist/denylist для арбитража проверяются
-    # ОДИН РАЗ при старте против фиксированного набора пулов (см. выше) — живое
-    # изменение их не имело бы эффекта, поэтому не применяется в этом цикле.
+    # watched_wallets/pool_registry/reference_pools живые (см. цикл ниже);
+    # allowlist/denylist для арбитража проверяются ОДИН РАЗ при старте против
+    # фиксированного набора пулов (см. _all_configured_tokens выше) — живое
+    # изменение их не имело бы эффекта на уже проверенные пулы, поэтому не
+    # применяется в этом цикле.
     watched_wallets = {a.lower() for a in watched_wallets}
-    live_config.seed_if_missing(settings.live_config_file, watched_wallets, token_allowlist, token_denylist)
+    live_config.seed_if_missing(
+        settings.live_config_file, watched_wallets, token_allowlist, token_denylist,
+        reference_pools=reference_pools, pool_registry=pool_registry,
+    )
     heartbeat_path = os.path.join(settings.heartbeat_dir, "eth_arb.heartbeat")
     heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
@@ -244,6 +248,15 @@ async def run(
                 applied = live_config.apply_risk_overrides_live(settings, live["risk"])
                 if applied:
                     logger.info("live-конфиг: risk-параметры обновлены: %s", applied)
+                if live_config.sync_pool_registry(pool_registry, live["pool_registry"]):
+                    logger.info("live-конфиг: pool_registry обновлён (%d пулов)", len(pool_registry))
+                # simulator.reference_pools хранит ключи В НИЖНЕМ РЕГИСТРЕ (см.
+                # TwoPoolArbSimulator.__init__) — приводим перед sync_dict,
+                # иначе lookup по swap.pool_address.lower() перестанет находить
+                # пул, если в live_config.json адрес записан не тем регистром.
+                live_reference_pools = {k.lower(): v for k, v in live["reference_pools"].items()}
+                if live_config.sync_dict(simulator.reference_pools, live_reference_pools):
+                    logger.info("live-конфиг: reference_pools обновлён (%d)", len(simulator.reference_pools))
 
             sim = await simulator.simulate(swap)
             if not sim.profitable:

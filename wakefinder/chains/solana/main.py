@@ -37,7 +37,7 @@ from spl.token.instructions import get_associated_token_address
 from wakefinder import live_config
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.simulator import TwoPoolArbSimulator
-from wakefinder.chains.solana.watcher import RaydiumVaultWatcher
+from wakefinder.chains.solana.watcher import SUBSCRIPTION_SYNC_INTERVAL_SECONDS, RaydiumVaultWatcher
 from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.canary import CanaryController
@@ -131,7 +131,10 @@ async def run(
     consecutive_failures = 0
     last_drawdown_check = 0.0
     last_live_config_check = 0.0
-    live_config.seed_if_missing(settings.live_config_file, set(), token_allowlist, token_denylist)
+    live_config.seed_if_missing(
+        settings.live_config_file, set(), token_allowlist, token_denylist,
+        reference_pools=reference_pools, solana_pools=pools,
+    )
     heartbeat_path = os.path.join(settings.heartbeat_dir, "solana_arb.heartbeat")
     heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
@@ -166,6 +169,10 @@ async def run(
             applied = live_config.apply_risk_overrides_live(settings, live["risk"])
             if applied:
                 logger.info("live-конфиг: risk-параметры обновлены: %s", applied)
+            if live_config.sync_dict(simulator.reference_pools, live["reference_pools"]):
+                logger.info("live-конфиг: reference_pools обновлён (%d)", len(simulator.reference_pools))
+            if live_config.sync_dict(pools, live["solana_pools"]):
+                logger.info("live-конфиг: solana_pools обновлён (%d) — подписки на изменение обновятся в течение %d с", len(pools), SUBSCRIPTION_SYNC_INTERVAL_SECONDS)
 
         sim = await simulator.simulate(swap)
         if not sim.profitable:

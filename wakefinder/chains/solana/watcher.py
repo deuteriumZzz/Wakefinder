@@ -18,14 +18,23 @@ ETH) здесь НЕ реализован. accountSubscribe на vault-акка�
 конкретный кошелёк — декодер под произвольный DEX не входит в этот MVP.
 Добавляйте `logsSubscribe(mentions=[wallet])` по конкретным адресам отдельно,
 если это понадобится.
+
+Live-config: self.pools мутируется live_config.sync_dict() IN PLACE (тот же
+объект, не пересоздаётся) — watch() периодически (каждые
+SUBSCRIPTION_SYNC_INTERVAL_SECONDS, чаще при активном трафике) пересчитывает
+vault-индекс из self.pools и до/отписывает accountSubscribe на разницу, тот
+же принцип, что и в chains/solana/wallet_watcher.py:WalletSwapWatcher.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 
 from solana.rpc.websocket_api import connect
 from solders.pubkey import Pubkey
 
 from wakefinder.common.interfaces import MempoolWatcher, PendingSwap
+
+SUBSCRIPTION_SYNC_INTERVAL_SECONDS = 5
 
 
 class RaydiumVaultWatcher(MempoolWatcher):
@@ -37,29 +46,54 @@ class RaydiumVaultWatcher(MempoolWatcher):
     ):
         """pools: {pool_id: {"base_vault": ..., "quote_vault": ..., "base_mint": ..., "quote_mint": ...}}"""
         self.ws_url = ws_url
-        self.pools = pools
+        self.pools = pools  # мутируется live_config'ом in place — см. docstring модуля
         self.min_amount_in = min_amount_in
-        # адрес vault -> (pool_id, "base"/"quote") — для сопоставления уведомлений с пулом
-        self._vault_index: dict[str, tuple[str, str]] = {}
         self._last_balance: dict[str, int] = {}
-        for pool_id, cfg in pools.items():
-            self._vault_index[cfg["base_vault"]] = (pool_id, "base")
-            self._vault_index[cfg["quote_vault"]] = (pool_id, "quote")
+
+    def _vault_index(self) -> dict[str, tuple[str, str]]:
+        """адрес vault -> (pool_id, "base"/"quote") — пересчитывается из
+        self.pools на каждый вызов, а не кэшируется в __init__, чтобы live-
+        добавление/удаление пула отражалось без пересборки watcher'а."""
+        index: dict[str, tuple[str, str]] = {}
+        for pool_id, cfg in self.pools.items():
+            index[cfg["base_vault"]] = (pool_id, "base")
+            index[cfg["quote_vault"]] = (pool_id, "quote")
+        return index
+
+    async def _sync_subscriptions(self, ws, sub_ids: dict[int, str]) -> None:
+        target = set(self._vault_index())
+        current = set(sub_ids.values())
+        for vault_address in target - current:
+            await ws.account_subscribe(Pubkey.from_string(vault_address), encoding="jsonParsed")
+            first = await ws.recv()
+            sub_ids[first[0].result] = vault_address
+        for sub_id, vault_address in list(sub_ids.items()):
+            if vault_address not in target:
+                await ws.account_unsubscribe(sub_id)
+                del sub_ids[sub_id]
+                self._last_balance.pop(vault_address, None)
 
     async def watch(self) -> AsyncIterator[PendingSwap]:
         async with connect(self.ws_url) as ws:
             sub_ids: dict[int, str] = {}
-            for vault_address in self._vault_index:
-                await ws.account_subscribe(Pubkey.from_string(vault_address), encoding="jsonParsed")
-                first = await ws.recv()
-                sub_ids[first[0].result] = vault_address
+            await self._sync_subscriptions(ws, sub_ids)
 
-            async for messages in ws:
+            while True:
+                try:
+                    messages = await asyncio.wait_for(ws.recv(), timeout=SUBSCRIPTION_SYNC_INTERVAL_SECONDS)
+                except asyncio.TimeoutError:
+                    await self._sync_subscriptions(ws, sub_ids)
+                    continue
+
+                vault_index = self._vault_index()
                 for msg in messages:
                     vault_address = sub_ids.get(msg.subscription)
                     if vault_address is None:
                         continue
-                    pool_id, side = self._vault_index[vault_address]
+                    entry = vault_index.get(vault_address)
+                    if entry is None:
+                        continue  # пул удалён из self.pools между подпиской и этим сообщением — отписка догонит на следующем sync
+                    pool_id, side = entry
 
                     try:
                         amount = int(msg.result.value.data.parsed["info"]["tokenAmount"]["amount"])
@@ -91,3 +125,5 @@ class RaydiumVaultWatcher(MempoolWatcher):
                         token_out=token_out,
                         amount_in=delta,
                     )
+
+                await self._sync_subscriptions(ws, sub_ids)

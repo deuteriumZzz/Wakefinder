@@ -205,6 +205,27 @@ def test_api_config_post_then_get_roundtrips(tmp_path, monkeypatch):
     assert resp.json()["risk"]["copytrade_size_pct"] == 4.0
 
 
+def test_api_config_post_roundtrips_reference_pools_and_pool_registry(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_USERNAME", "admin")
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")
+    client = _client(tmp_path, monkeypatch)
+    payload = {
+        "watched_wallets": [], "token_allowlist": [], "token_denylist": [], "risk": {},
+        "reference_pools": {"0xPOOL": {"pool": "0xREF", "router": "0xROUTER"}},
+        "pool_registry": [{"token0": "0xAAA", "token1": "0xBBB", "pool": "0xPOOL"}],
+        "solana_pools": {"pool1": {"base_vault": "V1", "quote_vault": "V2", "base_mint": "M1", "quote_mint": "M2"}},
+    }
+
+    resp = client.post("/api/config", auth=("admin", "s3cret"), json=payload)
+    assert resp.status_code == 200
+
+    resp = client.get("/api/config", auth=("admin", "s3cret"))
+    body = resp.json()
+    assert body["reference_pools"] == payload["reference_pools"]
+    assert body["pool_registry"] == payload["pool_registry"]
+    assert body["solana_pools"] == payload["solana_pools"]
+
+
 def test_api_config_post_rejects_malformed_risk(tmp_path, monkeypatch):
     monkeypatch.setenv("DASHBOARD_USERNAME", "admin")
     monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")

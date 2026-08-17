@@ -95,6 +95,9 @@ class LiveConfigPayload(BaseModel):
     token_allowlist: list[str] = []
     token_denylist: list[str] = []
     risk: dict[str, float] = {}
+    reference_pools: dict[str, dict[str, str]] = {}
+    pool_registry: list[dict[str, str]] = []
+    solana_pools: dict[str, dict[str, str]] = {}
 
 
 @app.get("/api/price_history", dependencies=[Depends(_check_auth)])
