@@ -289,6 +289,7 @@ async def run(
                 raw_txs=[_to_0x_hex(victim_raw), _to_0x_hex(buy_leg), _to_0x_hex(sell_leg)],
                 target_block=block_number + 1,
             )
+            latency_ms = (time.time() - swap.detected_at) * 1000
             included = await sender.send(bundle)
             logger.info("swap=%s profit_wei=%d included=%s", swap.tx_hash, sim.expected_profit_wei, included)
 
@@ -309,7 +310,7 @@ async def run(
 
             trade_log.log_attempt(
                 settings.trade_log_file, "eth", swap.pool_address, sim.expected_profit_wei, included, [swap.tx_hash],
-                realized_profit=realized_profit,
+                realized_profit=realized_profit, latency_ms=latency_ms,
             )
             if included and realized_profit is not None:
                 pnl_ledger.record_closed_trade(settings.pnl_ledger_file, "eth", "arb", realized_profit)

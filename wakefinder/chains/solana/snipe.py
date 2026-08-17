@@ -217,11 +217,12 @@ async def run(token_denylist: frozenset[str] = frozenset()):
             if amount_in <= 0:
                 continue
 
+            latency_ms = (time.time() - new_mint.detected_at) * 1000
             included, bought_amount = await _swap_via_jupiter_and_send(
                 client, jupiter, sender, keypair, tip, settings.solana_wsol_address, new_mint.mint_address, amount_in, slippage_bps=SLIPPAGE_BPS,
             )
             logger.info("снайп-вход: mint=%s amount_in=%d included=%s", new_mint.mint_address, amount_in, included)
-            trade_log.log_attempt(settings.trade_log_file, "solana", "", amount_in, included, [new_mint.tx_hash], strategy="snipe_entry")
+            trade_log.log_attempt(settings.trade_log_file, "solana", "", amount_in, included, [new_mint.tx_hash], strategy="snipe_entry", latency_ms=latency_ms)
             if not included:
                 continue
 

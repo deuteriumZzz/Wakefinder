@@ -17,6 +17,8 @@ class ChainMetrics:
     avg_expected_profit: float
     avg_realized_profit: float | None  # None, если ни одной записи с realized_profit
     simulation_accuracy: float | None  # среднее realized/expected там, где оба есть и expected != 0
+    avg_latency_ms: float | None = None  # None, если ни одной записи с latency_ms (детекция -> отправка, только entry)
+    median_latency_ms: float | None = None
 
 
 def compute_chain_metrics(trade_log_path: str) -> dict[str, ChainMetrics]:
@@ -30,6 +32,7 @@ def compute_chain_metrics(trade_log_path: str) -> dict[str, ChainMetrics]:
     realized_counts: dict[str, int] = {}
     accuracy_sums: dict[str, float] = {}
     accuracy_counts: dict[str, int] = {}
+    latencies: dict[str, list[float]] = {}
 
     with open(trade_log_path) as f:
         for line in f:
@@ -60,9 +63,14 @@ def compute_chain_metrics(trade_log_path: str) -> dict[str, ChainMetrics]:
                     accuracy_sums[chain] = accuracy_sums.get(chain, 0.0) + (realized / expected)
                     accuracy_counts[chain] = accuracy_counts.get(chain, 0) + 1
 
+            latency_ms = record.get("latency_ms")
+            if latency_ms is not None:
+                latencies.setdefault(chain, []).append(latency_ms)
+
     result: dict[str, ChainMetrics] = {}
     for chain, total in totals.items():
         included = included_counts.get(chain, 0)
+        chain_latencies = sorted(latencies.get(chain, []))
         result[chain] = ChainMetrics(
             chain=chain,
             total_attempts=total,
@@ -71,5 +79,7 @@ def compute_chain_metrics(trade_log_path: str) -> dict[str, ChainMetrics]:
             avg_expected_profit=expected_sums.get(chain, 0) / total,
             avg_realized_profit=(realized_sums[chain] / realized_counts[chain]) if realized_counts.get(chain) else None,
             simulation_accuracy=(accuracy_sums[chain] / accuracy_counts[chain]) if accuracy_counts.get(chain) else None,
+            avg_latency_ms=(sum(chain_latencies) / len(chain_latencies)) if chain_latencies else None,
+            median_latency_ms=chain_latencies[len(chain_latencies) // 2] if chain_latencies else None,
         )
     return result

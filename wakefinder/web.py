@@ -257,7 +257,7 @@ _PAGE = """
   <table id="sol-copytrade-table"><thead><tr><th>Токен</th><th>Вход</th><th>Сейчас</th><th>PnL</th><th>Кошелёк</th></tr></thead><tbody></tbody></table>
 
   <h3>Метрики (fill rate, точность симуляции)</h3>
-  <table id="metrics-table"><thead><tr><th>Сеть</th><th>Попыток</th><th>Included</th><th>Fill rate</th><th>Avg expected</th><th>Avg realized</th><th>Точность</th></tr></thead><tbody></tbody></table>
+  <table id="metrics-table"><thead><tr><th>Сеть</th><th>Попыток</th><th>Included</th><th>Fill rate</th><th>Avg expected</th><th>Avg realized</th><th>Точность</th><th>Latency avg/med</th></tr></thead><tbody></tbody></table>
 
   <h3>Heartbeat процессов</h3>
   <table id="heartbeats-table"><thead><tr><th>Процесс</th><th>Heartbeat</th></tr></thead><tbody></tbody></table>
@@ -268,11 +268,12 @@ _PAGE = """
   <h3>История закрытых сделок (реализованный PnL)</h3>
   <table id="pnl-history-table"><thead><tr><th>Когда</th><th>Сеть</th><th>Стратегия</th><th>Токен</th><th>Realized PnL</th><th>Держали</th></tr></thead><tbody></tbody></table>
 
-  <h3>Живой конфиг (watched_wallets / allowlist / denylist / risk)</h3>
+  <h3>Живой конфиг (watched_wallets / allowlist / denylist / risk / пулы арбитража)</h3>
   <p class="muted" style="max-width:70ch;">
     Правки подхватываются торговыми процессами на следующем опросе
     (обычно в течение LIVE_CONFIG_CHECK_INTERVAL_SECONDS, по умолчанию 10с) —
-    не мгновенно. Пулы арбитража здесь не редактируются (см. README).
+    не мгновенно. reference_pools/pool_registry/solana_pools тоже редактируются
+    здесь (см. README "Живой конфиг").
   </p>
   <textarea id="config-editor" style="width:100%; min-height:220px; background:var(--panel); color:var(--text); border:1px solid var(--border);
     border-radius:6px; padding:0.7rem; font-family:inherit; font-size:0.85rem;"></textarea>
@@ -363,11 +364,13 @@ async function refresh() {
   const chains = Object.keys(state.metrics);
   metricsBody.innerHTML = chains.length ? chains.sort().map(chain => {
     const m = state.metrics[chain];
+    const latency = m.avg_latency_ms !== null ? `${m.avg_latency_ms.toFixed(0)} / ${m.median_latency_ms.toFixed(0)} мс` : "—";
     return `<tr><td>${esc(chain)}</td><td>${m.total_attempts}</td><td>${m.included}</td>
       <td>${(m.fill_rate * 100).toFixed(0)}%</td><td>${m.avg_expected_profit.toLocaleString()}</td>
       <td>${m.avg_realized_profit !== null ? m.avg_realized_profit.toLocaleString() : "—"}</td>
-      <td>${m.simulation_accuracy !== null ? (m.simulation_accuracy * 100).toFixed(0) + "%" : "—"}</td></tr>`;
-  }).join("") : '<tr><td colspan="7" class="muted">нет данных в trade_log</td></tr>';
+      <td>${m.simulation_accuracy !== null ? (m.simulation_accuracy * 100).toFixed(0) + "%" : "—"}</td>
+      <td>${latency}</td></tr>`;
+  }).join("") : '<tr><td colspan="8" class="muted">нет данных в trade_log</td></tr>';
 
   const hbBody = document.querySelector("#heartbeats-table tbody");
   hbBody.innerHTML = state.heartbeats.map(h => `

@@ -19,6 +19,7 @@ def log_attempt(
     strategy: str = "arb",
     wallet: str = "",
     realized_profit: int | None = None,
+    latency_ms: float | None = None,
 ) -> None:
     record = {
         "ts": time.time(),
@@ -32,5 +33,11 @@ def log_attempt(
     }
     if realized_profit is not None:
         record["realized_profit"] = realized_profit
+    if latency_ms is not None:
+        # Детекция -> отправка бандла/tx, см. PendingSwap.detected_at и
+        # common/metrics.py — только ENTRY-путям есть смысл это писать
+        # (exit триггерится нашим же trailing-stop/live-config опросом, не
+        # внешним событием, "задержка реакции" там не определена так же).
+        record["latency_ms"] = latency_ms
     with open(path, "a") as f:
         f.write(json.dumps(record) + "\n")

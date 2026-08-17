@@ -222,7 +222,7 @@ def test_pnl_history_view_missing_file_returns_empty(tmp_path):
 _PROM_STATE = {
     "kill_switch_engaged": False,
     "heartbeats": [{"process": "eth_arb", "age_seconds": 12.3, "stale": False}, {"process": "eth_copytrade", "age_seconds": None, "stale": True}],
-    "metrics": {"eth": {"total_attempts": 10, "included": 8, "fill_rate": 0.8, "avg_expected_profit": 100000.0, "avg_realized_profit": 90000.0, "simulation_accuracy": 0.9}},
+    "metrics": {"eth": {"total_attempts": 10, "included": 8, "fill_rate": 0.8, "avg_expected_profit": 100000.0, "avg_realized_profit": 90000.0, "simulation_accuracy": 0.9, "avg_latency_ms": 142.5, "median_latency_ms": 120.0}},
     "eth": {"balance": 1.5},
     "solana": {"balance": None},
 }
@@ -249,6 +249,12 @@ def test_render_prometheus_omits_none_values_not_crashes():
     text = render_prometheus(_PROM_STATE)
     assert "wakefinder_sol_balance" not in text  # solana.balance is None
     assert "wakefinder_heartbeat_age_seconds{process=\"eth_copytrade\"}" not in text  # age_seconds is None for this process
+
+
+def test_render_prometheus_includes_latency_gauges():
+    text = render_prometheus(_PROM_STATE)
+    assert 'wakefinder_avg_latency_ms{chain="eth"} 142.5' in text
+    assert 'wakefinder_median_latency_ms{chain="eth"} 120.0' in text
 
 
 def test_render_prometheus_has_help_and_type_lines():

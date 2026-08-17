@@ -1,6 +1,7 @@
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -13,6 +14,11 @@ class PendingSwap:
     token_out: str
     amount_in: int
     sender: str = ""  # отправитель, если известен (нужен для watchlist/консенсус-логики; Solana-вариант не всегда может его дать)
+    # Момент, когда watcher РЕШИЛ, что это оно — не момент попадания в мемпул
+    # ноды (то мы не видим), а начало НАШЕГО пайплайна реакции. Используется
+    # для замера latency "детекция -> отправка" (см. common/latency.py) —
+    # честная нижняя граница задержки, не полная картина от появления в сети.
+    detected_at: float = field(default_factory=time.time)
 
 
 @dataclass
@@ -27,6 +33,7 @@ class NewPool:
     token0: str
     token1: str
     block_number: int
+    detected_at: float = field(default_factory=time.time)
 
 
 @dataclass
@@ -44,6 +51,7 @@ class PendingLiquidityAdd:
     token: str
     amount_token_desired: int
     amount_eth: int
+    detected_at: float = field(default_factory=time.time)
 
 
 @dataclass
@@ -56,6 +64,7 @@ class NewMint:
     tx_hash: str
     mint_address: str
     slot: int
+    detected_at: float = field(default_factory=time.time)
 
 
 @dataclass

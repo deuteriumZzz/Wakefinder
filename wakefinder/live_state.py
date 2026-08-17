@@ -150,6 +150,7 @@ def metrics_view(trade_log_file: str) -> dict:
             "total_attempts": m.total_attempts, "included": m.included, "fill_rate": m.fill_rate,
             "avg_expected_profit": m.avg_expected_profit, "avg_realized_profit": m.avg_realized_profit,
             "simulation_accuracy": m.simulation_accuracy,
+            "avg_latency_ms": m.avg_latency_ms, "median_latency_ms": m.median_latency_ms,
         }
         for chain, m in metrics.items()
     }
@@ -308,6 +309,8 @@ def render_prometheus(state: dict) -> str:
         gauge("wakefinder_avg_expected_profit", "Средняя ожидаемая прибыль на попытку, нативные единицы", m["avg_expected_profit"], labels)
         gauge("wakefinder_avg_realized_profit", "Средняя реализованная прибыль на included-сделку, нативные единицы", m["avg_realized_profit"], labels)
         gauge("wakefinder_simulation_accuracy", "Среднее отношение realized/expected", m["simulation_accuracy"], labels)
+        gauge("wakefinder_avg_latency_ms", "Средняя задержка детекция->отправка на entry-попытку, мс", m["avg_latency_ms"], labels)
+        gauge("wakefinder_median_latency_ms", "Медианная задержка детекция->отправка на entry-попытку, мс", m["median_latency_ms"], labels)
 
     lines: list[str] = []
     for name, (help_text, samples) in families.items():

@@ -170,6 +170,7 @@ async def _send_single_swap(
 async def _try_enter(
     w3, account, router_address, chain_id, token_in, token_out, pool_address, watched_wallet,
     size_pct, max_total_exposure_pct, positions, positions_lock, positions_file, trade_log_file,
+    detected_at: float,
 ):
     balance = await w3.eth.get_balance(account.address)
 
@@ -208,9 +209,10 @@ async def _try_enter(
         return
     amount_out_min = expected_out * (10_000 - SLIPPAGE_BPS) // 10_000
 
+    latency_ms = (time.time() - detected_at) * 1000
     included, tx_hash = await _send_single_swap(w3, account, router_address, chain_id, [token_in, token_out], amount_in, amount_out_min)
     logger.info("копитрейд-вход (консенсус): токен=%s триггер-кошелёк=%s amount_in=%d included=%s", token_out, watched_wallet, amount_in, included)
-    trade_log.log_attempt(trade_log_file, "eth", pool_address, amount_in, included, [tx_hash], strategy="copytrade_entry", wallet=watched_wallet)
+    trade_log.log_attempt(trade_log_file, "eth", pool_address, amount_in, included, [tx_hash], strategy="copytrade_entry", wallet=watched_wallet, latency_ms=latency_ms)
     if not included:
         return
 
@@ -397,7 +399,7 @@ async def run(
                 await _try_enter(
                     w3, account, settings.eth_router_address, chain_id, swap.token_in, swap.token_out,
                     swap.pool_address, swap.sender, settings.copytrade_size_pct, settings.copytrade_max_total_exposure_pct,
-                    positions, positions_lock, settings.copytrade_positions_file, settings.trade_log_file,
+                    positions, positions_lock, settings.copytrade_positions_file, settings.trade_log_file, swap.detected_at,
                 )
         finally:
             stop_loss_task.cancel()

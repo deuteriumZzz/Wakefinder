@@ -52,6 +52,27 @@ def test_separates_chains(tmp_path):
     assert metrics["eth"].avg_realized_profit is None
 
 
+def test_latency_averages_and_median(tmp_path):
+    path = tmp_path / "trades.jsonl"
+    _write_log(path, [
+        {"chain": "eth", "included": True, "expected_profit": 10, "latency_ms": 100.0},
+        {"chain": "eth", "included": True, "expected_profit": 10, "latency_ms": 200.0},
+        {"chain": "eth", "included": True, "expected_profit": 10, "latency_ms": 300.0},
+        {"chain": "eth", "included": True, "expected_profit": 10},  # без latency_ms — не считается
+    ])
+    m = compute_chain_metrics(str(path))["eth"]
+    assert abs(m.avg_latency_ms - 200.0) < 1e-9
+    assert m.median_latency_ms == 200.0
+
+
+def test_latency_none_when_no_records_have_it(tmp_path):
+    path = tmp_path / "trades.jsonl"
+    _write_log(path, [{"chain": "eth", "included": True, "expected_profit": 10}])
+    m = compute_chain_metrics(str(path))["eth"]
+    assert m.avg_latency_ms is None
+    assert m.median_latency_ms is None
+
+
 def test_malformed_lines_skipped(tmp_path):
     path = tmp_path / "trades.jsonl"
     with open(path, "w") as f:

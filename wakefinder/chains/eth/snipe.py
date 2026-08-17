@@ -303,11 +303,12 @@ async def _handle_mined_candidate(
     if amount_in <= 0:
         return
 
+    latency_ms = (time.time() - pool.detected_at) * 1000
     included, tx_hash, bought_amount = await _buy(
         w3, account, settings.eth_router_address, chain_id, settings.eth_weth_address, result.token, amount_in,
     )
     logger.info("снайп-вход: токен=%s пул=%s amount_in=%d included=%s", result.token, pool.pool_address, amount_in, included)
-    trade_log.log_attempt(settings.trade_log_file, "eth", pool.pool_address, amount_in, included, [tx_hash], strategy="snipe_entry")
+    trade_log.log_attempt(settings.trade_log_file, "eth", pool.pool_address, amount_in, included, [tx_hash], strategy="snipe_entry", latency_ms=latency_ms)
     if not included:
         return
 
@@ -369,12 +370,13 @@ async def _handle_backrun_candidate(
     if amount_in <= 0:
         return
 
+    latency_ms = (time.time() - pending.detected_at) * 1000
     included, tx_hash, bought_amount = await _buy_backrun(
         w3, sender, account, settings.eth_router_address, chain_id, settings.eth_weth_address, token,
         amount_in, victim_raw, reserve_weth, reserve_token, target_block,
     )
     logger.info("снайп backrun-вход: токен=%s amount_in=%d target_block=%d included=%s", token, amount_in, target_block, included)
-    trade_log.log_attempt(settings.trade_log_file, "eth", "", amount_in, included, [tx_hash], strategy="snipe_entry")
+    trade_log.log_attempt(settings.trade_log_file, "eth", "", amount_in, included, [tx_hash], strategy="snipe_entry", latency_ms=latency_ms)
     if not included:
         return
 

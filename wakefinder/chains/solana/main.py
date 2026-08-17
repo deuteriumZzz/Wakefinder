@@ -217,6 +217,7 @@ async def run(
             raw_txs=[to_base64(bytes(buy_tx)), to_base64(bytes(sell_tx)), to_base64(bytes(tip_tx))],
             target_block=0,  # у Jito-бандлов нет обязательного target slot, как у Flashbots target_block
         )
+        latency_ms = (time.time() - swap.detected_at) * 1000
         included = await sender.send(bundle)
         logger.info("swap=%s profit_lamports=%d included=%s", swap.tx_hash, sim.expected_profit_wei, included)
 
@@ -235,7 +236,7 @@ async def run(
 
         trade_log.log_attempt(
             settings.trade_log_file, "solana", swap.pool_address, sim.expected_profit_wei, included, [swap.tx_hash],
-            realized_profit=realized_profit,
+            realized_profit=realized_profit, latency_ms=latency_ms,
         )
         if included and realized_profit is not None:
             pnl_ledger.record_closed_trade(settings.pnl_ledger_file, "solana", "arb", realized_profit)

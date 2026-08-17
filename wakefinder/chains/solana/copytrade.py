@@ -327,6 +327,7 @@ async def run(
             if not await _has_sufficient_balance(client, keypair.pubkey(), swap.token_in, amount_in):
                 continue
 
+            latency_ms = (time.time() - swap.detected_at) * 1000
             included, amount_out = await _swap_via_jupiter_and_send(
                 client, jupiter, sender, keypair, tip, swap.token_in, swap.token_out, amount_in
             )
@@ -334,7 +335,7 @@ async def run(
                 "копитрейд-вход (консенсус): токен=%s триггер-кошелёк=%s amount_in=%d included=%s",
                 swap.token_out, swap.sender, amount_in, included,
             )
-            trade_log.log_attempt(settings.trade_log_file, "solana", "", amount_in, included, [], strategy="copytrade_entry", wallet=swap.sender)
+            trade_log.log_attempt(settings.trade_log_file, "solana", "", amount_in, included, [], strategy="copytrade_entry", wallet=swap.sender, latency_ms=latency_ms)
             if not included:
                 continue
 
