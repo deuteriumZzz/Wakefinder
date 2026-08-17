@@ -24,6 +24,7 @@ from wakefinder.common.metrics import compute_chain_metrics
 from wakefinder.common.pnl_ledger import read_closed_trades
 from wakefinder.common.price_feed import fetch_usd_prices
 from wakefinder.common.price_history import log_snapshot
+from wakefinder.common.strategy_stats import compute_strategy_stats
 from wakefinder.common.wallet_stats import compute_wallet_stats
 
 HEARTBEAT_STALE_SECONDS = 90
@@ -194,6 +195,24 @@ def pnl_history_view(pnl_ledger_file: str, prices: dict, limit: int = 50) -> lis
     return out
 
 
+def strategy_stats_view(pnl_ledger_file: str) -> list[dict]:
+    """Sharpe/Sortino + дрифт win-rate по (chain, strategy) — см. docstring
+    common/strategy_stats.py про отличие от drawdown circuit breaker'а.
+    limit=100_000 — вся история леджера, не только "последние 50" как в
+    pnl_history_view (там для отображения ленты, здесь для статистики нужна
+    вся выборка, которая есть)."""
+    rows = read_closed_trades(pnl_ledger_file, limit=100_000)
+    stats = compute_strategy_stats(rows)
+    return [
+        {
+            "chain": s.chain, "strategy": s.strategy, "trades": s.trades, "win_rate": s.win_rate,
+            "sharpe": s.sharpe, "sortino": s.sortino,
+            "win_rate_recent": s.win_rate_recent, "win_rate_drift": s.win_rate_drift,
+        }
+        for s in sorted(stats.values(), key=lambda s: (s.chain, s.strategy))
+    ]
+
+
 async def gather_state(settings) -> dict:
     """Единая точка сбора всего, что показывает дашборд — вызывается и
     начальным рендером страницы, и periodic /api/state опросом с фронта,
@@ -276,6 +295,7 @@ async def gather_state(settings) -> dict:
     prices = fetch_usd_prices()
     state["wallet_stats"] = wallet_stats_view(settings.trade_log_file, prices)
     state["pnl_history"] = pnl_history_view(settings.pnl_ledger_file, prices)
+    state["strategy_stats"] = strategy_stats_view(settings.pnl_ledger_file)
     state["prices"] = prices
     return state
 
@@ -317,6 +337,15 @@ def render_prometheus(state: dict) -> str:
         gauge("wakefinder_simulation_accuracy", "Среднее отношение realized/expected", m["simulation_accuracy"], labels)
         gauge("wakefinder_avg_latency_ms", "Средняя задержка детекция->отправка на entry-попытку, мс", m["avg_latency_ms"], labels)
         gauge("wakefinder_median_latency_ms", "Медианная задержка детекция->отправка на entry-попытку, мс", m["median_latency_ms"], labels)
+
+    for s in state.get("strategy_stats", []):
+        labels = f'{{chain="{s["chain"]}",strategy="{s["strategy"]}"}}'
+        gauge("wakefinder_strategy_trades_total", "Всего закрытых сделок по стратегии", s["trades"], labels)
+        gauge("wakefinder_strategy_win_rate", "Доля прибыльных закрытых сделок по стратегии", s["win_rate"], labels)
+        gauge("wakefinder_strategy_win_rate_recent", "Win rate по последним N закрытым сделкам", s["win_rate_recent"], labels)
+        gauge("wakefinder_strategy_win_rate_drift", "win_rate_recent - win_rate; отрицательное = деградация", s["win_rate_drift"], labels)
+        gauge("wakefinder_strategy_sharpe", "Sharpe ratio по закрытым сделкам стратегии", s["sharpe"], labels)
+        gauge("wakefinder_strategy_sortino", "Sortino ratio по закрытым сделкам стратегии", s["sortino"], labels)
 
     lines: list[str] = []
     for name, (help_text, samples) in families.items():

@@ -268,6 +268,9 @@ _PAGE = """
   <h3>История закрытых сделок (реализованный PnL)</h3>
   <table id="pnl-history-table"><thead><tr><th>Когда</th><th>Сеть</th><th>Стратегия</th><th>Токен</th><th>Realized PnL</th><th>Держали</th></tr></thead><tbody></tbody></table>
 
+  <h3>Sharpe/Sortino + дрифт win-rate по стратегии</h3>
+  <table id="strategy-stats-table"><thead><tr><th>Сеть</th><th>Стратегия</th><th>Сделок</th><th>Win rate</th><th>Win rate (недавние)</th><th>Дрифт</th><th>Sharpe</th><th>Sortino</th></tr></thead><tbody></tbody></table>
+
   <h3>Живой конфиг (watched_wallets / allowlist / denylist / risk / пулы арбитража)</h3>
   <p class="muted" style="max-width:70ch;">
     Правки подхватываются торговыми процессами на следующем опросе
@@ -392,6 +395,19 @@ async function refresh() {
     <td>${short(p.token)}</td><td class="${p.realized_pnl >= 0 ? 'ok' : 'bad'}">${num(p.realized_pnl)}${p.realized_pnl_usd !== null ? ` (~$${p.realized_pnl_usd.toFixed(2)})` : ""}</td>
     <td>${p.holding_seconds !== null ? p.holding_seconds.toFixed(0) + "с" : "—"}</td></tr>
   `).join("") : '<tr><td colspan="6" class="muted">нет закрытых сделок в pnl_ledger</td></tr>';
+
+  const ratio = v => v === null || v === undefined ? '<span class="muted">—</span>' : v.toFixed(2);
+  const driftCell = v => {
+    const cls = v > 0 ? "ok" : (v < 0 ? "bad" : "");
+    const sign = v > 0 ? "+" : "";
+    return `<span class="${cls}">${sign}${(v * 100).toFixed(0)}%</span>`;
+  };
+  const ssBody = document.querySelector("#strategy-stats-table tbody");
+  ssBody.innerHTML = state.strategy_stats.length ? state.strategy_stats.map(s => `
+    <tr><td>${esc(s.chain)}</td><td>${esc(s.strategy)}</td><td>${s.trades}</td>
+    <td>${(s.win_rate * 100).toFixed(0)}%</td><td>${(s.win_rate_recent * 100).toFixed(0)}%</td>
+    <td>${driftCell(s.win_rate_drift)}</td><td>${ratio(s.sharpe)}</td><td>${ratio(s.sortino)}</td></tr>
+  `).join("") : '<tr><td colspan="8" class="muted">нет закрытых сделок в pnl_ledger</td></tr>';
 }
 
 async function loadConfig() {
