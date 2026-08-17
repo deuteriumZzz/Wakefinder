@@ -50,6 +50,24 @@ ROUTER_ABI = [
         ],
         "outputs": [{"name": "amounts", "type": "uint256[]"}],
     },
+    {
+        "name": "addLiquidityETH",
+        "type": "function",
+        "inputs": [
+            {"name": "token", "type": "address"},
+            {"name": "amountTokenDesired", "type": "uint256"},
+            {"name": "amountTokenMin", "type": "uint256"},
+            {"name": "amountETHMin", "type": "uint256"},
+            {"name": "to", "type": "address"},
+            {"name": "deadline", "type": "uint256"},
+        ],
+        "outputs": [
+            {"name": "amountToken", "type": "uint256"},
+            {"name": "amountETH", "type": "uint256"},
+            {"name": "liquidity", "type": "uint256"},
+        ],
+        "payable": True,
+    },
 ]
 
 ERC20_ABI = [

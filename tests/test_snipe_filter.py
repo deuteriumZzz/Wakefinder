@@ -5,6 +5,7 @@ from wakefinder.chains.eth.snipe_filter import (
     ROUND_TRIP_SIM_FAILED,
     THIN_LIQUIDITY,
     WETH_PATH_UNSUPPORTED,
+    check_backrun_sellable,
     check_new_pool,
     check_round_trip_sellable,
 )
@@ -207,6 +208,63 @@ def test_round_trip_passes_when_all_legs_succeed():
     assert target_block == 101  # latest["number"] + 1
 
 
+# --- check_backrun_sellable: та же механика, что check_round_trip_sellable,
+# но котировка через get_amount_out(reserve_weth, reserve_token) вместо
+# router.getAmountsOut() (пул ещё не существует на цепи), и victim_raw —
+# первая нога бандла симуляции.
+VICTIM_RAW = b"victim-raw-tx"
+
+
+def test_backrun_fails_on_zero_reserves():
+    w3 = FakeRTW3(buy_out=0)
+    sender = FakeSender({"results": []})
+    result = asyncio.run(check_backrun_sellable(
+        w3, sender, FakeAccount(), RT_ROUTER, WETH, RT_TOKEN, chain_id=1, test_amount_wei=10**16,
+        victim_raw=VICTIM_RAW, target_block=101, reserve_weth=0, reserve_token=0,
+    ))
+    assert result.passed is False
+    assert result.reason == NO_QUOTE
+
+
+def test_backrun_fails_on_sell_leg_error():
+    w3 = FakeRTW3(buy_out=0)
+    sender = FakeSender({"results": [{"error": None}, {"error": None}, {"error": None}, {"error": "execution reverted"}]})
+    result = asyncio.run(check_backrun_sellable(
+        w3, sender, FakeAccount(), RT_ROUTER, WETH, RT_TOKEN, chain_id=1, test_amount_wei=10**16,
+        victim_raw=VICTIM_RAW, target_block=101, reserve_weth=10 * 10**18, reserve_token=1000 * 10**18,
+    ))
+    assert result.passed is False
+    assert ROUND_TRIP_SIM_FAILED in result.reason
+    assert "sell" in result.reason
+
+
+def test_backrun_fails_on_simulation_level_error():
+    w3 = FakeRTW3(buy_out=0)
+    sender = FakeSender({"error": "simulation failed entirely"})
+    result = asyncio.run(check_backrun_sellable(
+        w3, sender, FakeAccount(), RT_ROUTER, WETH, RT_TOKEN, chain_id=1, test_amount_wei=10**16,
+        victim_raw=VICTIM_RAW, target_block=101, reserve_weth=10 * 10**18, reserve_token=1000 * 10**18,
+    ))
+    assert result.passed is False
+    assert result.reason == ROUND_TRIP_SIM_FAILED
+
+
+def test_backrun_passes_when_all_legs_succeed():
+    w3 = FakeRTW3(buy_out=0)
+    sender = FakeSender({"results": [{"error": None}, {"error": None}, {"error": None}, {"error": None}]})
+    result = asyncio.run(check_backrun_sellable(
+        w3, sender, FakeAccount(), RT_ROUTER, WETH, RT_TOKEN, chain_id=1, test_amount_wei=10**16,
+        victim_raw=VICTIM_RAW, target_block=101, reserve_weth=10 * 10**18, reserve_token=1000 * 10**18,
+    ))
+    assert result.passed is True
+    assert result.quoted_buy_amount > 0
+    # четыре ноги [victim, buy, approve, sell], victim_raw — ПЕРВАЯ
+    raw_txs, target_block = sender.calls[0]
+    assert len(raw_txs) == 4
+    assert raw_txs[0] == VICTIM_RAW
+    assert target_block == 101
+
+
 if __name__ == "__main__":
     test_rejects_pair_without_weth()
     test_rejects_thin_liquidity()
@@ -216,4 +274,8 @@ if __name__ == "__main__":
     test_round_trip_fails_on_sell_leg_error()
     test_round_trip_fails_on_simulation_level_error()
     test_round_trip_passes_when_all_legs_succeed()
+    test_backrun_fails_on_zero_reserves()
+    test_backrun_fails_on_sell_leg_error()
+    test_backrun_fails_on_simulation_level_error()
+    test_backrun_passes_when_all_legs_succeed()
     print("ok")

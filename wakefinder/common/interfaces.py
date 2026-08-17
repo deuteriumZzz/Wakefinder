@@ -30,16 +30,20 @@ class NewPool:
 
 
 @dataclass
-class NewMint:
-    """Только что созданный SPL-токен (SPL Token Program `InitializeMint`/
-    `InitializeMint2`) — сигнал для снайпинга на Solana. НЕ значит, что у
-    токена уже есть ликвидный пул — большинство новых минтов никогда не
-    получают пул вообще; реальная проверка "можно ли купить/продать" —
-    отдельный шаг через Jupiter (см. chains/solana/snipe_filter.py)."""
+class PendingLiquidityAdd:
+    """PENDING (не подтверждённый) вызов addLiquidityETH на роутере — в
+    отличие от NewPool (уже смайненное событие PairCreated), это сигнал ДО
+    того, как пара реально появилась в блоке, нужный для backrun-снайпинга
+    (chains/eth/liquidity_watcher.py, снайпинг в ТОМ ЖЕ блоке через Flashbots-
+    бандл [victim_raw, buy_raw], а не после того, как пара уже смайнена).
+    amount_token_desired/amount_eth — это НАМЕРЕНИЕ создателя пула из
+    calldata, не гарантированный факт: транзакция может не попасть в блок
+    вообще, или router может добавить МЕНЬШЕ (см. docstring watcher'а)."""
 
     tx_hash: str
-    mint_address: str
-    slot: int
+    token: str
+    amount_token_desired: int
+    amount_eth: int
 
 
 @dataclass

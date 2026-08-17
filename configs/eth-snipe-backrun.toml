@@ -1,0 +1,35 @@
+# Профиль: ETH backrun-снайпинг — та же стратегия, что configs/eth-snipe.toml,
+# но реагирует на PENDING addLiquidityETH создателя пары и покупает в ТОМ ЖЕ
+# блоке через Flashbots-бандл [victim_raw, buy_raw], вместо ожидания
+# смайненного PairCreated + входа через публичный мемпул. См. docstring
+# chains/eth/liquidity_watcher.py и README "Backrun-снайпинг".
+#
+# РИСК: тот же профиль риска, что у обычного снайпинга (см. eth-snipe.toml),
+# ПЛЮС этот путь новее и меньше проверен в бою — держите snipe_size_pct
+# маленьким, используйте canary_start_fraction на новом профиле.
+#
+# Требует ОТДЕЛЬНОГО процесса/кошелька от других стратегий при общем
+# ETH_PRIVATE_KEY — иначе конфликт nonce. Также требует FLASHBOTS_SIGNER_KEY
+# (тот же, что у арбитража) — backrun-бандл идёт через Flashbots relay, не
+# публичный мемпул.
+#
+# Запуск: SNIPE_BACKRUN_MODE=true python -m wakefinder.cli run configs/eth-snipe-backrun.toml
+# (SNIPE_BACKRUN_MODE — переменная окружения, не часть [risk]: это выбор
+# архитектуры входа при старте процесса, не runtime-подстраиваемый параметр,
+# тот же принцип, что ETH_AUTO_DISCOVER_REFERENCE_POOLS.)
+
+chain = "eth"
+strategy = "snipe"
+
+token_denylist = []
+
+[risk]
+snipe_size_pct = 0.5
+snipe_test_amount_eth = 0.01
+snipe_min_liquidity_weth = 2.0
+snipe_trailing_stop_pct = 30
+snipe_trailing_stop_check_interval_seconds = 10
+snipe_max_concurrent_positions = 3
+canary_start_fraction = 0.2
+canary_ramp_trades = 20
+max_drawdown_eth = 0.2

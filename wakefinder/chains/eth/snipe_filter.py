@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from web3 import AsyncWeb3, Web3
 
 from wakefinder.chains.eth.abi import ERC20_ABI, PAIR_ABI, ROUTER_ABI
+from wakefinder.common.amm import get_amount_out
 
 WETH_PATH_UNSUPPORTED = "пара не содержит WETH — снайпинг поддерживает только WETH-котируемые пары"
 THIN_LIQUIDITY = "ликвидность WETH-стороны ниже минимума"
@@ -146,6 +147,78 @@ async def check_round_trip_sellable(
     if simulation.get("error"):
         return SnipeCheckResult(passed=False, reason=ROUND_TRIP_SIM_FAILED, token=token)
     for leg, result in zip(["buy", "approve", "sell"], simulation.get("results", [])):
+        if result.get("error"):
+            return SnipeCheckResult(passed=False, reason=f"{ROUND_TRIP_SIM_FAILED} ({leg}: {result.get('error')})", token=token)
+
+    return SnipeCheckResult(passed=True, token=token, quoted_buy_amount=expected_out)
+
+
+async def check_backrun_sellable(
+    w3: AsyncWeb3,
+    sender,
+    account,
+    router_address: str,
+    weth_address: str,
+    token: str,
+    chain_id: int,
+    test_amount_wei: int,
+    victim_raw: bytes,
+    target_block: int,
+    reserve_weth: int,
+    reserve_token: int,
+) -> SnipeCheckResult:
+    """Тот же принцип, что check_round_trip_sellable, для backrun-снайпинга
+    (SNIPE_BACKRUN_MODE): пул ЕЩЁ НЕ существует на цепи в момент симуляции —
+    это pending addLiquidityETH создателя, ещё не смайненный. Поэтому две
+    вещи отличаются:
+    1. Котировка buy-ноги считается через common/amm.py:get_amount_out по
+       reserve_weth/reserve_token (декодированным из calldata victim-транзакции
+       — см. docstring PendingLiquidityAdd про то, что это НАМЕРЕНИЕ, не
+       гарантированный факт), а не router.getAmountsOut() — тот вызов упал бы,
+       пары ещё нет.
+    2. victim_raw ДОБАВЛЯЕТСЯ первой ногой бандла симуляции — [victim, buy,
+       approve, sell] — иначе buy-нога тоже видела бы несуществующий пул."""
+    expected_out = get_amount_out(test_amount_wei, reserve_weth, reserve_token)
+    if expected_out <= 0:
+        return SnipeCheckResult(passed=False, reason=NO_QUOTE, token=token)
+    sell_amount = expected_out * 95 // 100  # тот же запас, что в check_round_trip_sellable
+
+    nonce = await w3.eth.get_transaction_count(account.address, "pending")
+    latest = await w3.eth.get_block("latest")
+    priority_fee = Web3.to_wei(2, "gwei")
+    max_fee = latest["baseFeePerGas"] * 2 + priority_fee
+    deadline = int(time.time()) + 60
+
+    encoder = Web3()
+    router_enc = encoder.eth.contract(address=router_address, abi=ROUTER_ABI)
+    erc20_enc = encoder.eth.contract(address=token, abi=ERC20_ABI)
+
+    def _sign(fn, value: int = 0) -> str:
+        nonlocal nonce
+        tx = fn.build_transaction({
+            "from": account.address, "value": value, "nonce": nonce, "gas": _ROUND_TRIP_GAS_LIMIT,
+            "maxFeePerGas": max_fee, "maxPriorityFeePerGas": priority_fee, "chainId": chain_id,
+        })
+        nonce += 1
+        return account.sign_transaction(tx).rawTransaction
+
+    buy_raw = _sign(
+        router_enc.functions.swapExactETHForTokens(amountOutMin=0, path=[weth_address, token], to=account.address, deadline=deadline),
+        value=test_amount_wei,
+    )
+    approve_raw = _sign(erc20_enc.functions.approve(router_address, 2**256 - 1))
+    sell_raw = _sign(
+        router_enc.functions.swapExactTokensForTokens(amountIn=sell_amount, amountOutMin=0, path=[token, weth_address], to=account.address, deadline=deadline)
+    )
+
+    try:
+        simulation = await sender.simulate([victim_raw, buy_raw, approve_raw, sell_raw], target_block)
+    except Exception:
+        return SnipeCheckResult(passed=False, reason=ROUND_TRIP_SIM_FAILED, token=token)
+
+    if simulation.get("error"):
+        return SnipeCheckResult(passed=False, reason=ROUND_TRIP_SIM_FAILED, token=token)
+    for leg, result in zip(["victim", "buy", "approve", "sell"], simulation.get("results", [])):
         if result.get("error"):
             return SnipeCheckResult(passed=False, reason=f"{ROUND_TRIP_SIM_FAILED} ({leg}: {result.get('error')})", token=token)
 

@@ -34,14 +34,17 @@ from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
 from wakefinder import live_config
 from wakefinder.chains.eth.abi import ERC20_ABI, ROUTER_ABI
+from wakefinder.chains.eth.liquidity_watcher import LiquidityAddWatcher
 from wakefinder.chains.eth.pair_watcher import PairCreatedWatcher
 from wakefinder.chains.eth.sender import FlashbotsBundleSender
-from wakefinder.chains.eth.snipe_filter import check_new_pool, check_round_trip_sellable
+from wakefinder.chains.eth.snipe_filter import check_backrun_sellable, check_new_pool, check_round_trip_sellable
 from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
 from wakefinder.common.alerts import send_telegram_alert
+from wakefinder.common.amm import get_amount_out
 from wakefinder.common.canary import CanaryController
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
+from wakefinder.common.interfaces import Bundle
 from wakefinder.common.reconnect import with_reconnect
 from wakefinder.common.trailing_stop import TrailingStopTracker
 
@@ -127,6 +130,44 @@ async def _buy(
     )
     raw = account.sign_transaction(tx).rawTransaction
     included, tx_hash = await _send_raw(w3, raw)
+    return included, tx_hash, expected_out
+
+
+def _to_0x_hex(raw: bytes) -> str:
+    hex_str = bytes(raw).hex()
+    return hex_str if hex_str.startswith("0x") else "0x" + hex_str
+
+
+async def _buy_backrun(
+    w3: AsyncWeb3, sender, account, router_address: str, chain_id: int, weth_address: str, token: str,
+    amount_in_wei: int, victim_raw: bytes, reserve_weth: int, reserve_token: int, target_block: int,
+) -> tuple[bool, str, int]:
+    """Тот же смысл, что _buy(), но вход идёт ОДНИМ Flashbots-бандлом
+    [victim_raw, buy_raw] на target_block — своп исполняется в ТОМ ЖЕ блоке,
+    что и addLiquidityETH создателя (см. docstring liquidity_watcher.py), а
+    не после того, как пул уже подтверждён и виден публичному мемпулу.
+    Котировка — через common/amm.py:get_amount_out по reserve_weth/
+    reserve_token (декодированным из calldata victim-транзакции), не
+    router.getAmountsOut() — тот вызов упал бы, пары ещё нет на цепи."""
+    expected_out = get_amount_out(amount_in_wei, reserve_weth, reserve_token)
+    amount_out_min = expected_out * (10_000 - SLIPPAGE_BPS) // 10_000
+
+    nonce = await w3.eth.get_transaction_count(account.address, "pending")
+    max_fee, priority_fee = await _fees(w3)
+    router = _ENCODER.eth.contract(address=router_address, abi=ROUTER_ABI)
+    tx = router.functions.swapExactETHForTokens(
+        amountOutMin=amount_out_min, path=[weth_address, token], to=account.address, deadline=int(time.time()) + 60,
+    ).build_transaction(
+        {
+            "from": account.address, "value": amount_in_wei, "nonce": nonce, "gas": GAS_LIMIT,
+            "maxFeePerGas": max_fee, "maxPriorityFeePerGas": priority_fee, "chainId": chain_id,
+        }
+    )
+    buy_raw = account.sign_transaction(tx).rawTransaction
+
+    bundle = Bundle(raw_txs=[_to_0x_hex(victim_raw), _to_0x_hex(buy_raw)], target_block=target_block)
+    included = await sender.send(bundle)
+    tx_hash = _to_0x_hex(Web3.keccak(buy_raw))
     return included, tx_hash, expected_out
 
 
@@ -226,14 +267,137 @@ async def _trailing_stop_loop(
                 trackers.pop(token, None)
 
 
+async def _handle_mined_candidate(
+    w3, sender, account, chain_id, settings, pool, token_denylist,
+    positions, positions_lock, trackers, test_amount_wei, min_liquidity_weth,
+) -> None:
+    """Дефолтный путь: пул уже смайнен (pool_watcher.PairCreatedWatcher),
+    вход через ПУБЛИЧНЫЙ мемпул — см. docstring модуля."""
+    result = await check_new_pool(
+        w3, settings.eth_router_address, pool.pool_address, pool.token0, pool.token1,
+        settings.eth_weth_address, test_amount_wei, min_liquidity_weth,
+    )
+    if not result.passed:
+        logger.info("снайп-фильтр отклонил пул=%s: %s", pool.pool_address, result.reason)
+        return
+
+    if token_denylist and result.token.lower() in {t.lower() for t in token_denylist}:
+        return
+
+    async with positions_lock:
+        already_held = result.token in positions
+    if already_held:
+        return
+
+    if settings.snipe_round_trip_check:
+        round_trip = await check_round_trip_sellable(
+            w3, sender, account, settings.eth_router_address, settings.eth_weth_address,
+            result.token, chain_id, test_amount_wei,
+        )
+        if not round_trip.passed:
+            logger.info("снайп round-trip проверка отклонила токен=%s: %s", result.token, round_trip.reason)
+            return
+
+    balance = await w3.eth.get_balance(account.address)
+    amount_in = int(balance * settings.snipe_size_pct / 100)
+    if amount_in <= 0:
+        return
+
+    included, tx_hash, bought_amount = await _buy(
+        w3, account, settings.eth_router_address, chain_id, settings.eth_weth_address, result.token, amount_in,
+    )
+    logger.info("снайп-вход: токен=%s пул=%s amount_in=%d included=%s", result.token, pool.pool_address, amount_in, included)
+    trade_log.log_attempt(settings.trade_log_file, "eth", pool.pool_address, amount_in, included, [tx_hash], strategy="snipe_entry")
+    if not included:
+        return
+
+    await _approve(w3, account, settings.eth_router_address, chain_id, result.token)
+
+    async with positions_lock:
+        positions[result.token] = SnipePosition(
+            token=result.token, pool_address=pool.pool_address, amount_held=bought_amount,
+            entry_amount_in_wei=amount_in, opened_at=time.time(), approved=True,
+        )
+        trackers[result.token] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct)
+        _save_positions(settings.snipe_positions_file, positions)
+
+
+async def _handle_backrun_candidate(
+    w3, sender, account, chain_id, settings, pending, token_denylist,
+    positions, positions_lock, trackers,
+) -> None:
+    """SNIPE_BACKRUN_MODE: pending addLiquidityETH создателя
+    (liquidity_watcher.LiquidityAddWatcher), вход ОДНИМ Flashbots-бандлом
+    [victim_raw, buy_raw] в target_block = block_number+1 — см. docstring
+    _buy_backrun(). pending.token/amount_token_desired/amount_eth — это
+    НАМЕРЕНИЕ из calldata, не гарантированный факт (см. PendingLiquidityAdd)."""
+    token = pending.token
+    if token_denylist and token.lower() in {t.lower() for t in token_denylist}:
+        return
+
+    async with positions_lock:
+        already_held = token in positions
+    if already_held:
+        return
+
+    try:
+        victim_raw = await w3.eth.get_raw_transaction(pending.tx_hash)
+    except Exception as exc:
+        logger.error(
+            "get_raw_transaction не удался для %s (%s) — ваш RPC-провайдер, вероятно, не "
+            "поддерживает eth_getRawTransactionByHash; без этого бот не может собрать бандл.",
+            pending.tx_hash, type(exc).__name__,
+        )
+        return
+
+    block_number = await w3.eth.block_number
+    target_block = block_number + 1
+    reserve_weth, reserve_token = pending.amount_eth, pending.amount_token_desired
+
+    if settings.snipe_round_trip_check:
+        test_amount_wei = Web3.to_wei(settings.snipe_test_amount_eth, "ether")
+        round_trip = await check_backrun_sellable(
+            w3, sender, account, settings.eth_router_address, settings.eth_weth_address, token, chain_id,
+            test_amount_wei, victim_raw, target_block, reserve_weth, reserve_token,
+        )
+        if not round_trip.passed:
+            logger.info("снайп backrun round-trip проверка отклонила токен=%s: %s", token, round_trip.reason)
+            return
+
+    balance = await w3.eth.get_balance(account.address)
+    amount_in = int(balance * settings.snipe_size_pct / 100)
+    if amount_in <= 0:
+        return
+
+    included, tx_hash, bought_amount = await _buy_backrun(
+        w3, sender, account, settings.eth_router_address, chain_id, settings.eth_weth_address, token,
+        amount_in, victim_raw, reserve_weth, reserve_token, target_block,
+    )
+    logger.info("снайп backrun-вход: токен=%s amount_in=%d target_block=%d included=%s", token, amount_in, target_block, included)
+    trade_log.log_attempt(settings.trade_log_file, "eth", "", amount_in, included, [tx_hash], strategy="snipe_entry")
+    if not included:
+        return
+
+    await _approve(w3, account, settings.eth_router_address, chain_id, token)
+
+    async with positions_lock:
+        positions[token] = SnipePosition(
+            token=token, pool_address="", amount_held=bought_amount,
+            entry_amount_in_wei=amount_in, opened_at=time.time(), approved=True,
+        )
+        trackers[token] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct)
+        _save_positions(settings.snipe_positions_file, positions)
+
+
 async def run(factory_address: str | None = None, token_denylist: frozenset[str] = frozenset()):
     settings = get_settings()
     account = Account.from_key(settings.resolved_eth_private_key())
     fb_signer = Account.from_key(settings.resolved_flashbots_signer_key())
-    # ТОЛЬКО для round-trip симуляции (check_round_trip_sellable) — этот
-    # sender ничего не отправляет, реальные вход/выход снайпинга по-прежнему
-    # идут в публичный мемпул (см. docstring модуля).
-    sim_sender = FlashbotsBundleSender(rpc_url=settings.eth_rpc_http_url.get_secret_value(), signer_account=fb_signer)
+    # В обычном режиме — ТОЛЬКО для round-trip симуляции (check_round_trip_sellable),
+    # реальные вход/выход по-прежнему идут в публичный мемпул (см. docstring
+    # модуля). В SNIPE_BACKRUN_MODE этот же sender ещё и реально ОТПРАВЛЯЕТ
+    # бандл входа (_buy_backrun) — тот же relay-клиент, не отдельный.
+    sender = FlashbotsBundleSender(rpc_url=settings.eth_rpc_http_url.get_secret_value(), signer_account=fb_signer)
 
     token_denylist = {a.lower() for a in token_denylist}
     live_config.seed_if_missing(settings.live_config_file, set(), set(), token_denylist)
@@ -250,7 +414,11 @@ async def run(factory_address: str | None = None, token_denylist: frozenset[str]
     async with AsyncExitStack() as stack:
         w3 = await stack.enter_async_context(AsyncWeb3.persistent_websocket(WebsocketProviderV2(settings.eth_rpc_ws_url.get_secret_value())))
         chain_id = await w3.eth.chain_id
-        watcher = PairCreatedWatcher(w3, factory_address or settings.eth_factory_address)
+        watcher = (
+            LiquidityAddWatcher(w3, settings.eth_router_address, min_liquidity_weth)
+            if settings.snipe_backrun_mode
+            else PairCreatedWatcher(w3, factory_address or settings.eth_factory_address)
+        )
 
         trailing_task = asyncio.create_task(
             _trailing_stop_loop(
@@ -302,53 +470,16 @@ async def run(factory_address: str | None = None, token_denylist: frozenset[str]
                 if at_capacity:
                     continue
 
-                result = await check_new_pool(
-                    w3, settings.eth_router_address, pool.pool_address, pool.token0, pool.token1,
-                    settings.eth_weth_address, test_amount_wei, min_liquidity_weth,
-                )
-                if not result.passed:
-                    logger.info("снайп-фильтр отклонил пул=%s: %s", pool.pool_address, result.reason)
-                    continue
-
-                if token_denylist and result.token.lower() in {t.lower() for t in token_denylist}:
-                    continue
-
-                async with positions_lock:
-                    already_held = result.token in positions
-                if already_held:
-                    continue
-
-                if settings.snipe_round_trip_check:
-                    round_trip = await check_round_trip_sellable(
-                        w3, sim_sender, account, settings.eth_router_address, settings.eth_weth_address,
-                        result.token, chain_id, test_amount_wei,
+                if settings.snipe_backrun_mode:
+                    await _handle_backrun_candidate(
+                        w3, sender, account, chain_id, settings, pool, token_denylist,
+                        positions, positions_lock, trackers,
                     )
-                    if not round_trip.passed:
-                        logger.info("снайп round-trip проверка отклонила токен=%s: %s", result.token, round_trip.reason)
-                        continue
-
-                balance = await w3.eth.get_balance(account.address)
-                amount_in = int(balance * settings.snipe_size_pct / 100)
-                if amount_in <= 0:
-                    continue
-
-                included, tx_hash, bought_amount = await _buy(
-                    w3, account, settings.eth_router_address, chain_id, settings.eth_weth_address, result.token, amount_in,
-                )
-                logger.info("снайп-вход: токен=%s пул=%s amount_in=%d included=%s", result.token, pool.pool_address, amount_in, included)
-                trade_log.log_attempt(settings.trade_log_file, "eth", pool.pool_address, amount_in, included, [tx_hash], strategy="snipe_entry")
-                if not included:
-                    continue
-
-                await _approve(w3, account, settings.eth_router_address, chain_id, result.token)
-
-                async with positions_lock:
-                    positions[result.token] = SnipePosition(
-                        token=result.token, pool_address=pool.pool_address, amount_held=bought_amount,
-                        entry_amount_in_wei=amount_in, opened_at=time.time(), approved=True,
+                else:
+                    await _handle_mined_candidate(
+                        w3, sender, account, chain_id, settings, pool, token_denylist,
+                        positions, positions_lock, trackers, test_amount_wei, min_liquidity_weth,
                     )
-                    trackers[result.token] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct)
-                    _save_positions(settings.snipe_positions_file, positions)
         finally:
             trailing_task.cancel()
             heartbeat_task.cancel()

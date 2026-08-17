@@ -163,6 +163,12 @@ class Settings(BaseSettings):
     # Стоит дополнительных RPC-вызовов и задержки перед входом — выключайте,
     # если скорость важнее этой проверки.
     snipe_round_trip_check: bool = True
+    # Backrun-снайпинг (chains/eth/liquidity_watcher.py): реагирует на PENDING
+    # addLiquidityETH создателя пары и покупает в ТОМ ЖЕ блоке через Flashbots-
+    # бандл [victim_raw, buy_raw] — быстрее, чем дефолтный путь (ждать
+    # смайненный PairCreated, покупать через публичный мемпул), но код новее
+    # и меньше проверен в бою — по умолчанию выключено, включайте осознанно.
+    snipe_backrun_mode: bool = False
     snipe_positions_file: str = "positions_snipe.json"
 
     # Снайпинг на Solana (chains/solana/snipe.py, mint_watcher.py,
