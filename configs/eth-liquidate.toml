@@ -1,0 +1,24 @@
+# Профиль: ликвидации на Aave V3 — четвёртая стратегия, отдельная от
+# арбитража/копитрейдинга/снайпинга. См. docstring chains/eth/liquidate.py.
+#
+# РЕАКТИВНАЯ discovery: конкурирует за уже найденные другими ликвидаторами
+# позиции (их pending liquidationCall в публичном мемпуле), не сканирует
+# рынок самостоятельно — см. docstring chains/eth/liquidation_watcher.py.
+#
+# КАПИТАЛ КОШЕЛЬКА, НЕ FLASH LOAN — держите на кошельке debt-активы из
+# LIQUIDATION_DEBT_ASSETS (задаётся через .env, не здесь — это адреса
+# ТОКЕНОВ, не risk-параметр), которыми готовы погашать чужой долг. Пусто =
+# стратегия неактивна.
+#
+# Требует ОТДЕЛЬНОГО процесса/кошелька от других 3 стратегий при общем
+# ETH_PRIVATE_KEY — иначе конфликт nonce.
+#
+# Запуск: python -m wakefinder.cli run configs/eth-liquidate.toml
+
+chain = "eth"
+strategy = "liquidate"
+
+[risk]
+liquidation_min_profit_usd = 5.0    # минимальный чистый профит (после оценки газа), чтобы участвовать в гонке
+liquidation_gas_limit = 400000      # оценка газа liquidationCall — используется и в профит-расчёте, и как gas-лимит транзакции
+max_drawdown_eth = 0.3

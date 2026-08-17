@@ -82,6 +82,25 @@ class NewMint:
 
 
 @dataclass
+class PendingLiquidation:
+    """PENDING (не подтверждённый) вызов Aave V3 Pool.liquidationCall(),
+    замеченный в публичном мемпуле — см. chains/eth/liquidation_watcher.py.
+    Aave допускает НЕСКОЛЬКО одновременных вызовов liquidationCall() на одну
+    и ту же недообеспеченную позицию (первый замайненный получает discount,
+    остальные ревертят) — значит увидеть чужую pending-транзакцию означает
+    "эта позиция liquidatable ПРЯМО СЕЙЧАС", и можно попробовать
+    сконкурировать за то же самое включение своей копией того же вызова с
+    более высоким tip, а не обязательно искать позиции самостоятельно."""
+
+    tx_hash: str
+    collateral_asset: str
+    debt_asset: str
+    user: str
+    debt_to_cover: int
+    detected_at: float = field(default_factory=time.time)
+
+
+@dataclass
 class SimResult:
     """Результат симуляции стратегии по конкретному pending-свопу.
 

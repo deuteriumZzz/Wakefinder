@@ -21,6 +21,14 @@ KNOWN_ROUTERS = {
     "0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F".lower(),  # Sushiswap Router (mainnet)
 }
 
+# Тот же принцип, что KNOWN_ROUTERS — liquidationCall двигает деньги
+# (pull debtAsset, push collateral), опечатка/скомпрометированный .env не
+# должны молча указывать на неизвестный контракт. Адрес НЕ проверен вживую
+# в этой песочнице — см. docstring chains/eth/aave_abi.py.
+KNOWN_AAVE_POOLS = {
+    "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2".lower(),  # Aave V3 Pool (mainnet)
+}
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
@@ -304,11 +312,37 @@ class Settings(BaseSettings):
     copytrade_sizing_min_multiplier: float = Field(default=0.25, gt=0)
     copytrade_sizing_max_multiplier: float = Field(default=1.5, gt=0)
 
+    # Ликвидации на Aave V3 (chains/eth/liquidate.py) — четвёртая стратегия,
+    # РЕАКТИВНАЯ (конкурирует за чужие уже найденные pending liquidationCall,
+    # не ищет недообеспеченные позиции самостоятельно, см. docstring
+    # liquidation_watcher.py). Использует КАПИТАЛ КОШЕЛЬКА (не flash loan) —
+    # нужно заранее держать и одобрить (approve) debt-активы, которыми готовы
+    # погашать чужой долг, см. README "Ликвидации на Aave V3".
+    aave_pool_address: str = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
+    aave_pool_data_provider_address: str = "0x7B4EB56E7CD4b454BA8ff71E4518426369a138a"
+    aave_price_oracle_address: str = "0x54586bE62E3c3580375aE3723C145253060Ca0C"
+    # Через запятую — debt-активы, которые бот заранее держит и готов
+    # одобрить Pool'у на трату (approve при старте). Пусто = стратегия
+    # фактически неактивна (не с чем конкурировать за ЛЮБУЮ найденную
+    # позицию — пропускаем все чужие liquidationCall).
+    liquidation_debt_assets: str = ""
+    liquidation_min_profit_usd: float = Field(default=5.0, gt=0)
+    liquidation_gas_limit: int = Field(default=400_000, ge=1)
+
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
         if self.eth_router_address.lower() not in KNOWN_ROUTERS:
             raise ValueError(
                 f"eth_router_address {self.eth_router_address} отсутствует в KNOWN_ROUTERS — "
+                "добавьте его осознанно в wakefinder/common/config.py, если это намеренно"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_aave_pool_allowlisted(self) -> "Settings":
+        if self.aave_pool_address.lower() not in KNOWN_AAVE_POOLS:
+            raise ValueError(
+                f"aave_pool_address {self.aave_pool_address} отсутствует в KNOWN_AAVE_POOLS — "
                 "добавьте его осознанно в wakefinder/common/config.py, если это намеренно"
             )
         return self

@@ -24,7 +24,7 @@ import tomllib
 logger = logging.getLogger("wakefinder.cli")
 
 CHAINS = ("eth", "solana")
-STRATEGIES = ("arb", "copytrade", "snipe")
+STRATEGIES = ("arb", "copytrade", "snipe", "liquidate")
 
 # ключи TOML [risk] -> переменные окружения Settings (common/config.py)
 _RISK_ENV_MAP = {
@@ -55,6 +55,9 @@ _RISK_ENV_MAP = {
     "solana_snipe_min_liquidity_sol": "SOLANA_SNIPE_MIN_LIQUIDITY_SOL",
     "canary_start_fraction": "CANARY_START_FRACTION",
     "canary_ramp_trades": "CANARY_RAMP_TRADES",
+    "liquidation_debt_assets": "LIQUIDATION_DEBT_ASSETS",
+    "liquidation_min_profit_usd": "LIQUIDATION_MIN_PROFIT_USD",
+    "liquidation_gas_limit": "LIQUIDATION_GAS_LIMIT",
 }
 
 
@@ -221,6 +224,15 @@ async def run_profile(path: str) -> None:
     elif chain == "solana" and strategy == "snipe":
         from wakefinder.chains.solana.snipe import run as solana_snipe_run
         await solana_snipe_run(token_denylist=token_denylist)
+    elif chain == "eth" and strategy == "liquidate":
+        from wakefinder.chains.eth.liquidate import run as eth_liquidate_run
+        await eth_liquidate_run()
+    else:
+        # chain/strategy сами по себе валидны (см. load_profile), но для ИХ
+        # КОМБИНАЦИИ нет run() — например liquidate сейчас только ETH
+        # (Aave V3), Solana-эквивалента нет. Явная ошибка вместо тихого
+        # "процесс стартовал и ничего не сделал".
+        raise ValueError(f"комбинация chain={chain} strategy={strategy} не поддерживается — нет run() для неё в cli.py")
 
 
 def main() -> None:
