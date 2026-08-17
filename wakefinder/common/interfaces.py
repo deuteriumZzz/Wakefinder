@@ -101,6 +101,23 @@ class PendingLiquidation:
 
 
 @dataclass
+class PendingLargeSwap:
+    """PENDING (не подтверждённый) вызов SwapRouter02.exactInputSingle() на
+    сконфигурированной V3-паре, замеченный в публичном мемпуле — см.
+    chains/eth/v3_swap_watcher.py и chains/eth/jit_liquidity.py. amount_in —
+    НАМЕРЕНИЕ отправителя из calldata, не гарантированный факт (та же
+    оговорка, что у PendingLiquidityAdd — транзакция может не попасть в
+    блок вообще, или исполниться иначе, если состояние сдвинулось)."""
+
+    tx_hash: str
+    token_in: str
+    token_out: str
+    fee: int
+    amount_in: int
+    detected_at: float = field(default_factory=time.time)
+
+
+@dataclass
 class SimResult:
     """Результат симуляции стратегии по конкретному pending-свопу.
 

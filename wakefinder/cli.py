@@ -24,7 +24,7 @@ import tomllib
 logger = logging.getLogger("wakefinder.cli")
 
 CHAINS = ("eth", "solana")
-STRATEGIES = ("arb", "copytrade", "snipe", "liquidate")
+STRATEGIES = ("arb", "copytrade", "snipe", "liquidate", "jit")
 
 # ключи TOML [risk] -> переменные окружения Settings (common/config.py)
 _RISK_ENV_MAP = {
@@ -58,6 +58,15 @@ _RISK_ENV_MAP = {
     "liquidation_debt_assets": "LIQUIDATION_DEBT_ASSETS",
     "liquidation_min_profit_usd": "LIQUIDATION_MIN_PROFIT_USD",
     "liquidation_gas_limit": "LIQUIDATION_GAS_LIMIT",
+    "jit_pool_address": "JIT_POOL_ADDRESS",
+    "jit_pool_token0": "JIT_POOL_TOKEN0",
+    "jit_pool_token1": "JIT_POOL_TOKEN1",
+    "jit_pool_fee": "JIT_POOL_FEE",
+    "jit_tick_range_half_width": "JIT_TICK_RANGE_HALF_WIDTH",
+    "jit_slippage_bps": "JIT_SLIPPAGE_BPS",
+    "jit_min_swap_amount_in_wei": "JIT_MIN_SWAP_AMOUNT_IN_WEI",
+    "jit_capital0_wei": "JIT_CAPITAL0_WEI",
+    "jit_capital1_wei": "JIT_CAPITAL1_WEI",
 }
 
 
@@ -227,6 +236,9 @@ async def run_profile(path: str) -> None:
     elif chain == "eth" and strategy == "liquidate":
         from wakefinder.chains.eth.liquidate import run as eth_liquidate_run
         await eth_liquidate_run()
+    elif chain == "eth" and strategy == "jit":
+        from wakefinder.chains.eth.jit_liquidity import run as eth_jit_run
+        await eth_jit_run()
     else:
         # chain/strategy сами по себе валидны (см. load_profile), но для ИХ
         # КОМБИНАЦИИ нет run() — например liquidate сейчас только ETH

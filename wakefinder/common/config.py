@@ -29,6 +29,13 @@ KNOWN_AAVE_POOLS = {
     "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2".lower(),  # Aave V3 Pool (mainnet)
 }
 
+# Тот же принцип — NonfungiblePositionManager.mint()/decreaseLiquidity()
+# двигают деньги. Адрес НЕ проверен вживую в этой песочнице — см. docstring
+# chains/eth/univ3_abi.py.
+KNOWN_NPM_ADDRESSES = {
+    "0xC36442b4a4522E871399CD717aBDD847Ab11FE88".lower(),  # Uniswap V3 NonfungiblePositionManager (mainnet)
+}
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
@@ -338,6 +345,25 @@ class Settings(BaseSettings):
     cowswap_order_valid_seconds: float = Field(default=180.0, gt=0)
     cowswap_order_poll_timeout_seconds: float = Field(default=60.0, gt=0)
 
+    # JIT-ликвидность на Uniswap V3 (chains/eth/jit_liquidity.py) — пятая
+    # стратегия, консервативный первый проход (широкий фиксированный
+    # tick-диапазон, не точный расчёт под своп жертвы, см. docstring модуля
+    # и common/univ3_math.py). ОДИН сконфигурированный пул — не сканирует
+    # рынок.
+    jit_npm_address: str = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"
+    jit_swap_router_address: str = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
+    jit_pool_address: str = ""
+    jit_pool_token0: str = ""
+    jit_pool_token1: str = ""
+    jit_pool_fee: int = Field(default=3000, ge=1)  # сотые доли бипса: 500=0.05%, 3000=0.3%, 10000=1%
+    # Половина ширины tick-диапазона в штуках tickSpacing — 100 при
+    # tickSpacing=60 (0.3%-пул) ~= ±2.7x ценового движения, широкий запас.
+    jit_tick_range_half_width: int = Field(default=100, ge=1)
+    jit_slippage_bps: int = Field(default=100, ge=0, le=10_000)
+    jit_min_swap_amount_in_wei: float = Field(default=10.0 * 10**18, gt=0)
+    jit_capital0_wei: float = Field(default=0, ge=0)
+    jit_capital1_wei: float = Field(default=0, ge=0)
+
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
         if self.eth_router_address.lower() not in KNOWN_ROUTERS:
@@ -352,6 +378,15 @@ class Settings(BaseSettings):
         if self.aave_pool_address.lower() not in KNOWN_AAVE_POOLS:
             raise ValueError(
                 f"aave_pool_address {self.aave_pool_address} отсутствует в KNOWN_AAVE_POOLS — "
+                "добавьте его осознанно в wakefinder/common/config.py, если это намеренно"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_npm_allowlisted(self) -> "Settings":
+        if self.jit_npm_address.lower() not in KNOWN_NPM_ADDRESSES:
+            raise ValueError(
+                f"jit_npm_address {self.jit_npm_address} отсутствует в KNOWN_NPM_ADDRESSES — "
                 "добавьте его осознанно в wakefinder/common/config.py, если это намеренно"
             )
         return self

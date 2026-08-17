@@ -1,0 +1,27 @@
+# Профиль: JIT-ликвидность на Uniswap V3 — пятая стратегия, отдельная от
+# арбитража/копитрейдинга/снайпинга/ликвидаций. См. docstring
+# chains/eth/jit_liquidity.py.
+#
+# КОНСЕРВАТИВНЫЙ первый проход: широкий фиксированный tick-диапазон вокруг
+# текущей цены (jit_tick_range_half_width), не точный расчёт под размер
+# конкретного свопа жертвы — см. docstring common/univ3_math.py.
+#
+# ОДИН сконфигурированный пул — не сканирует рынок. token0/token1
+# ЗАДАЮТСЯ ЧЕРЕЗ .env (JIT_POOL_TOKEN0/JIT_POOL_TOKEN1/JIT_POOL_ADDRESS,
+# JIT_CAPITAL0_WEI/JIT_CAPITAL1_WEI), не здесь — это адреса токенов и суммы
+# капитала, не risk-параметр в привычном смысле.
+#
+# Требует ОТДЕЛЬНОГО процесса/кошелька от других 4 стратегий при общем
+# ETH_PRIVATE_KEY — иначе конфликт nonce.
+#
+# Запуск: python -m wakefinder.cli run configs/eth-jit.toml
+
+chain = "eth"
+strategy = "jit"
+
+[risk]
+jit_pool_fee = 3000                 # 0.3% — самый распространённый tier
+jit_tick_range_half_width = 100     # широкий диапазон, консервативный первый проход
+jit_slippage_bps = 100
+jit_min_swap_amount_in_wei = 10000000000000000000  # 10 ETH — своп меньше этого не стоит внимания
+max_drawdown_eth = 0.3
