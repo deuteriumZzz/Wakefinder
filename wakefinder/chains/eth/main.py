@@ -48,7 +48,7 @@ from wakefinder.chains.eth.abi import ERC20_ABI, ROUTER_ABI
 from wakefinder.chains.eth.sender import FlashbotsBundleSender
 from wakefinder.chains.eth.simulator import GAS_LIMIT, KNOWN_DEX_FACTORIES, TwoPoolArbSimulator
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
-from wakefinder.common import heartbeat, killswitch, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.canary import CanaryController
 from wakefinder.common.alerts import send_telegram_alert
@@ -298,6 +298,8 @@ async def run(
                 settings.trade_log_file, "eth", swap.pool_address, sim.expected_profit_wei, included, [swap.tx_hash],
                 realized_profit=realized_profit,
             )
+            if included and realized_profit is not None:
+                pnl_ledger.record_closed_trade(settings.pnl_ledger_file, "eth", "arb", realized_profit)
 
             consecutive_failures = 0 if included else consecutive_failures + 1
             if consecutive_failures >= settings.max_consecutive_failures:

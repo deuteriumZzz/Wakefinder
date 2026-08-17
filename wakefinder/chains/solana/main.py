@@ -38,7 +38,7 @@ from wakefinder import live_config
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.simulator import TwoPoolArbSimulator
 from wakefinder.chains.solana.watcher import RaydiumVaultWatcher
-from wakefinder.common import heartbeat, killswitch, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.canary import CanaryController
 from wakefinder.common.alerts import send_telegram_alert
@@ -230,6 +230,8 @@ async def run(
             settings.trade_log_file, "solana", swap.pool_address, sim.expected_profit_wei, included, [swap.tx_hash],
             realized_profit=realized_profit,
         )
+        if included and realized_profit is not None:
+            pnl_ledger.record_closed_trade(settings.pnl_ledger_file, "solana", "arb", realized_profit)
 
         consecutive_failures = 0 if included else consecutive_failures + 1
         if consecutive_failures >= settings.max_consecutive_failures:

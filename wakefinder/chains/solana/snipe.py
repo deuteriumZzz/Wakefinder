@@ -33,7 +33,7 @@ from wakefinder.chains.solana.copytrade import _swap_via_jupiter_and_send
 from wakefinder.chains.solana.mint_watcher import NewMintWatcher
 from wakefinder.chains.solana.sender import JitoBundleSender
 from wakefinder.chains.solana.snipe_filter import check_mint_tradeable
-from wakefinder.common import heartbeat, killswitch, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.canary import CanaryController
@@ -94,6 +94,12 @@ async def _exit_position(
     )
     logger.info("снайп-выход (%s): mint=%s included=%s", reason, mint, included)
     trade_log.log_attempt(trade_log_file, "solana", "", amount_out, included, [], strategy="snipe_exit")
+    if included:
+        settings = get_settings()
+        pnl_ledger.record_closed_trade(
+            settings.pnl_ledger_file, "solana", "snipe", amount_out - pos.entry_amount_in,
+            token=mint, opened_at=pos.opened_at,
+        )
     if not included:
         settings = get_settings()
         send_telegram_alert(

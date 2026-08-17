@@ -21,6 +21,7 @@ from web3 import AsyncHTTPProvider, AsyncWeb3
 from wakefinder.chains.eth.abi import ROUTER_ABI
 from wakefinder.common import heartbeat, killswitch
 from wakefinder.common.metrics import compute_chain_metrics
+from wakefinder.common.pnl_ledger import read_closed_trades
 from wakefinder.common.price_feed import fetch_usd_prices
 from wakefinder.common.price_history import log_snapshot
 from wakefinder.common.wallet_stats import compute_wallet_stats
@@ -169,6 +170,27 @@ def wallet_stats_view(trade_log_file: str, prices: dict) -> list[dict]:
     return out
 
 
+def pnl_history_view(pnl_ledger_file: str, prices: dict, limit: int = 50) -> list[dict]:
+    """Последние ЗАКРЫТЫЕ сделки (common/pnl_ledger.py) — в отличие от
+    wallet_stats_view (агрегат по кошельку), здесь каждая строка — одна
+    реальная закрытая позиция, самые свежие первыми."""
+    decimals = {"eth": 10**18, "solana": 10**9}
+    price_keys = {"eth": "eth", "solana": "sol"}
+    rows = read_closed_trades(pnl_ledger_file, limit=limit)
+    out = []
+    for r in reversed(rows):
+        d = decimals.get(r["chain"])
+        price = prices.get(price_keys.get(r["chain"]))
+        pnl_native = r["realized_pnl"] / d if d else r["realized_pnl"]
+        out.append({
+            "ts": r["ts"], "chain": r["chain"], "strategy": r["strategy"],
+            "token": r["token"], "wallet": r["wallet"], "realized_pnl": pnl_native,
+            "realized_pnl_usd": pnl_native * price if price else None,
+            "holding_seconds": r["holding_seconds"],
+        })
+    return out
+
+
 async def gather_state(settings) -> dict:
     """Единая точка сбора всего, что показывает дашборд — вызывается и
     начальным рендером страницы, и periodic /api/state опросом с фронта,
@@ -246,6 +268,7 @@ async def gather_state(settings) -> dict:
 
     prices = fetch_usd_prices()
     state["wallet_stats"] = wallet_stats_view(settings.trade_log_file, prices)
+    state["pnl_history"] = pnl_history_view(settings.pnl_ledger_file, prices)
     state["prices"] = prices
     return state
 

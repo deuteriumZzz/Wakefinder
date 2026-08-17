@@ -21,6 +21,7 @@ _FAKE_STATE = {
     "eth": {"address": "0xABC", "balance": 1.5, "copytrade_positions": [], "snipe_positions": []},
     "solana": {"address": None, "balance": None, "copytrade_positions": []},
     "wallet_stats": [],
+    "pnl_history": [],
     "prices": {},
 }
 

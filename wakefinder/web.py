@@ -262,6 +262,9 @@ _PAGE = """
   <h3>Статистика по watched-кошелькам</h3>
   <table id="wallet-stats-table"><thead><tr><th>Кошелёк</th><th>Сеть</th><th>Входы</th><th>Выходы</th><th>net PnL~</th><th>Win rate</th></tr></thead><tbody></tbody></table>
 
+  <h3>История закрытых сделок (реализованный PnL)</h3>
+  <table id="pnl-history-table"><thead><tr><th>Когда</th><th>Сеть</th><th>Стратегия</th><th>Токен</th><th>Realized PnL</th><th>Держали</th></tr></thead><tbody></tbody></table>
+
   <h3>Живой конфиг (watched_wallets / allowlist / denylist / risk)</h3>
   <p class="muted" style="max-width:70ch;">
     Правки подхватываются торговыми процессами на следующем опросе
@@ -374,6 +377,13 @@ async function refresh() {
     <td>${num(s.net_pnl_estimate)}${s.net_pnl_usd !== null ? ` (~$${s.net_pnl_usd.toFixed(2)})` : ""}</td>
     <td>${(s.win_rate * 100).toFixed(0)}%</td></tr>
   `).join("") : '<tr><td colspan="6" class="muted">нет данных в trade_log</td></tr>';
+
+  const pnlBody = document.querySelector("#pnl-history-table tbody");
+  pnlBody.innerHTML = state.pnl_history.length ? state.pnl_history.map(p => `
+    <tr><td>${new Date(p.ts * 1000).toLocaleString()}</td><td>${esc(p.chain)}</td><td>${esc(p.strategy)}</td>
+    <td>${short(p.token)}</td><td class="${p.realized_pnl >= 0 ? 'ok' : 'bad'}">${num(p.realized_pnl)}${p.realized_pnl_usd !== null ? ` (~$${p.realized_pnl_usd.toFixed(2)})` : ""}</td>
+    <td>${p.holding_seconds !== null ? p.holding_seconds.toFixed(0) + "с" : "—"}</td></tr>
+  `).join("") : '<tr><td colspan="6" class="muted">нет закрытых сделок в pnl_ledger</td></tr>';
 }
 
 async function loadConfig() {

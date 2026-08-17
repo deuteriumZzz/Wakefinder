@@ -32,7 +32,7 @@ from wakefinder import live_config
 from wakefinder.chains.solana.main import _build_tip_tx, _sign_unsigned_tx, _tip_lamports
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.wallet_watcher import WalletSwapWatcher
-from wakefinder.common import heartbeat, killswitch, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.canary import CanaryController
@@ -130,6 +130,12 @@ async def _exit_position(client, jupiter, sender, keypair, tip, positions, posit
     included, amount_out = await _swap_via_jupiter_and_send(client, jupiter, sender, keypair, tip, pos.token, pos.token_in, pos.amount_held)
     logger.info("копитрейд-выход (%s): токен=%s included=%s", reason, token, included)
     trade_log.log_attempt(trade_log_file, "solana", "", amount_out, included, [], strategy="copytrade_exit", wallet=pos.watched_wallet)
+    if included:
+        settings = get_settings()
+        pnl_ledger.record_closed_trade(
+            settings.pnl_ledger_file, "solana", "copytrade", amount_out - pos.entry_amount_in,
+            token=pos.token, wallet=pos.watched_wallet, opened_at=pos.opened_at,
+        )
     if reason == "стоп-лосс":
         settings = get_settings()
         send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, f"[wakefinder/solana copytrade] стоп-лосс: токен={token} included={included}")

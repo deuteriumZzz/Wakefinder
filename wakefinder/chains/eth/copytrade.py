@@ -50,7 +50,7 @@ from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 from wakefinder import live_config
 from wakefinder.chains.eth.abi import PAIR_ABI, ROUTER_ABI
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
-from wakefinder.common import heartbeat, killswitch, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.amm import get_amount_out
 from wakefinder.common.canary import CanaryController
@@ -240,6 +240,12 @@ async def _exit_position(w3, account, router_address, chain_id, token: str, reas
     )
     logger.info("копитрейд-выход (%s): токен=%s included=%s", reason, token, included)
     trade_log.log_attempt(trade_log_file, "eth", pos.pool_address, expected_out, included, [tx_hash], strategy="copytrade_exit", wallet=pos.watched_wallet)
+    if included:
+        settings = get_settings()
+        pnl_ledger.record_closed_trade(
+            settings.pnl_ledger_file, "eth", "copytrade", expected_out - pos.entry_amount_in,
+            token=pos.token, wallet=pos.watched_wallet, opened_at=pos.opened_at,
+        )
     if reason == "стоп-лосс":
         settings = get_settings()
         send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, f"[wakefinder/eth copytrade] стоп-лосс: токен={token} included={included}")

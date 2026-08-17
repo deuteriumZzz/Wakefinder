@@ -37,7 +37,7 @@ from wakefinder.chains.eth.abi import ERC20_ABI, ROUTER_ABI
 from wakefinder.chains.eth.pair_watcher import PairCreatedWatcher
 from wakefinder.chains.eth.sender import FlashbotsBundleSender
 from wakefinder.chains.eth.snipe_filter import check_new_pool, check_round_trip_sellable
-from wakefinder.common import heartbeat, killswitch, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.canary import CanaryController
 from wakefinder.common.config import get_settings
@@ -191,6 +191,12 @@ async def _exit_position(
     included, amount_out = await _sell(w3, account, router_address, chain_id, weth_address, token, pos.amount_held)
     logger.info("снайп-выход (%s): токен=%s included=%s", reason, token, included)
     trade_log.log_attempt(trade_log_file, "eth", pos.pool_address, amount_out, included, [], strategy="snipe_exit")
+    if included:
+        settings = get_settings()
+        pnl_ledger.record_closed_trade(
+            settings.pnl_ledger_file, "eth", "snipe", amount_out - pos.entry_amount_in_wei,
+            token=token, opened_at=pos.opened_at,
+        )
     if not included:
         settings = get_settings()
         send_telegram_alert(

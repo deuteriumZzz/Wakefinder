@@ -2,10 +2,12 @@ import asyncio
 import json
 
 import wakefinder.live_state as live_state
+from wakefinder.common.pnl_ledger import record_closed_trade
 from wakefinder.live_state import (
     eth_copytrade_positions_live,
     eth_snipe_positions_live,
     gather_state,
+    pnl_history_view,
     render_prometheus,
     solana_copytrade_positions_live,
 )
@@ -119,6 +121,7 @@ class _FakeSettings:
         self.kill_switch_file = str(tmp_path / "kill")
         self.heartbeat_dir = str(tmp_path)
         self.trade_log_file = str(tmp_path / "trades.jsonl")
+        self.pnl_ledger_file = str(tmp_path / "pnl_ledger.jsonl")
         self.copytrade_positions_file = str(tmp_path / "positions.json")
         self.snipe_positions_file = str(tmp_path / "positions_snipe.json")
         self.solana_copytrade_positions_file = str(tmp_path / "positions_solana.json")
@@ -189,6 +192,31 @@ def test_gather_state_still_shows_positions_despite_eth_rpc_failure(tmp_path, mo
     assert len(positions) == 1
     assert positions[0]["entry_amount_in"] == 1.0  # из файла, без RPC
     assert positions[0]["current_value"] is None  # живую оценку получить не удалось — честно, не нулём
+
+
+def test_pnl_history_view_converts_to_native_units_and_orders_newest_first(tmp_path):
+    path = str(tmp_path / "pnl.jsonl")
+    record_closed_trade(path, "eth", "copytrade", 10**18, token="0xTOKEN", wallet="0xWHALE", opened_at=1000.0)
+    record_closed_trade(path, "solana", "arb", 2 * 10**9)
+    rows = pnl_history_view(path, prices={"eth": 3000.0, "sol": 150.0})
+    assert len(rows) == 2
+    assert rows[0]["chain"] == "solana"  # последняя запись первой
+    assert rows[0]["realized_pnl"] == 2.0
+    assert rows[0]["realized_pnl_usd"] == 300.0
+    assert rows[1]["realized_pnl"] == 1.0
+    assert rows[1]["realized_pnl_usd"] == 3000.0
+    assert rows[1]["holding_seconds"] > 0
+
+
+def test_pnl_history_view_omits_usd_without_price(tmp_path):
+    path = str(tmp_path / "pnl.jsonl")
+    record_closed_trade(path, "eth", "arb", 10**18)
+    rows = pnl_history_view(path, prices={})
+    assert rows[0]["realized_pnl_usd"] is None
+
+
+def test_pnl_history_view_missing_file_returns_empty(tmp_path):
+    assert pnl_history_view(str(tmp_path / "nope.jsonl"), prices={}) == []
 
 
 _PROM_STATE = {
