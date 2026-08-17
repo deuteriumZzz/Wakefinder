@@ -33,7 +33,7 @@ from wakefinder.chains.solana.copytrade import _swap_via_jupiter_and_send
 from wakefinder.chains.solana.mint_watcher import NewMintWatcher
 from wakefinder.chains.solana.sender import JitoBundleSender
 from wakefinder.chains.solana.snipe_filter import check_mint_tradeable
-from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wallet_lock
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.canary import CanaryController
@@ -135,6 +135,7 @@ async def run(token_denylist: frozenset[str] = frozenset()):
     live_config.seed_if_missing(settings.live_config_file, set(), set(), token_denylist)
 
     keypair = Keypair.from_base58_string(settings.resolved_solana_private_key())
+    _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, str(keypair.pubkey()), "solana_snipe")
     client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
     jupiter = Jupiter(client, keypair)
     sender = JitoBundleSender(settings.jito_block_engine_url, keypair)

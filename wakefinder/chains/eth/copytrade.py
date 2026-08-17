@@ -50,7 +50,7 @@ from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 from wakefinder import live_config
 from wakefinder.chains.eth.abi import PAIR_ABI, ROUTER_ABI
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
-from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wallet_lock
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.amm import get_amount_out
 from wakefinder.common.canary import CanaryController
@@ -277,6 +277,7 @@ async def run(
 ):
     settings = get_settings()
     account = Account.from_key(settings.resolved_eth_private_key())
+    _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, account.address, "eth_copytrade")
 
     # Мутируемые копии — живой конфиг (см. wakefinder/live_config.py)
     # обновляет ИХ ЖЕ объекты in place на каждом опросе, не пересоздаёт.

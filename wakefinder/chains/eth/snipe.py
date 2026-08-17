@@ -38,7 +38,7 @@ from wakefinder.chains.eth.liquidity_watcher import LiquidityAddWatcher
 from wakefinder.chains.eth.pair_watcher import PairCreatedWatcher
 from wakefinder.chains.eth.sender import FlashbotsBundleSender
 from wakefinder.chains.eth.snipe_filter import check_backrun_sellable, check_new_pool, check_round_trip_sellable
-from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wallet_lock
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.amm import get_amount_out
 from wakefinder.common.canary import CanaryController
@@ -394,6 +394,7 @@ async def _handle_backrun_candidate(
 async def run(factory_address: str | None = None, token_denylist: frozenset[str] = frozenset()):
     settings = get_settings()
     account = Account.from_key(settings.resolved_eth_private_key())
+    _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, account.address, "eth_snipe")
     fb_signer = Account.from_key(settings.resolved_flashbots_signer_key())
     # В обычном режиме — ТОЛЬКО для round-trip симуляции (check_round_trip_sellable),
     # реальные вход/выход по-прежнему идут в публичный мемпул (см. docstring

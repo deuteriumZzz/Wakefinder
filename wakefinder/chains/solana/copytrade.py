@@ -32,7 +32,7 @@ from wakefinder import live_config
 from wakefinder.chains.solana.main import _build_tip_tx, _sign_unsigned_tx, _tip_lamports
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.wallet_watcher import SUBSCRIPTION_SYNC_INTERVAL_SECONDS, WalletSwapWatcher
-from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wallet_lock
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.alerts import send_telegram_alert
 from wakefinder.common.canary import CanaryController
@@ -190,6 +190,7 @@ async def run(
         raise RuntimeError("SOLANA_RPC_WS_URL / SOLANA_RPC_HTTP_URL / SOLANA_PRIVATE_KEY(_FILE) не настроены")
 
     keypair = Keypair.from_base58_string(settings.resolved_solana_private_key())
+    _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, str(keypair.pubkey()), "solana_copytrade")
     client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
     jupiter = Jupiter(client, keypair)
     sender = JitoBundleSender(settings.jito_block_engine_url, keypair)

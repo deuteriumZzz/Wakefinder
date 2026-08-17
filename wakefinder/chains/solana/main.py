@@ -38,7 +38,7 @@ from wakefinder import live_config
 from wakefinder.chains.solana.sender import JitoBundleSender, to_base64
 from wakefinder.chains.solana.simulator import TwoPoolArbSimulator
 from wakefinder.chains.solana.watcher import SUBSCRIPTION_SYNC_INTERVAL_SECONDS, RaydiumVaultWatcher
-from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wallet_lock
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.canary import CanaryController
 from wakefinder.common.alerts import send_telegram_alert
@@ -118,6 +118,7 @@ async def run(
         )
 
     keypair = Keypair.from_base58_string(settings.resolved_solana_private_key())
+    _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, str(keypair.pubkey()), "solana_arb")
     client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
     jupiter = Jupiter(client, keypair)
 

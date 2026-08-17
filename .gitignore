@@ -7,3 +7,13 @@ __pycache__/
 *.egg-info/
 .kill
 .claude/
+
+# Рантайм-артефакты торговых процессов (по умолчанию пишутся в CWD, если не
+# указан другой путь в .env) — не код проекта, не должны попадать в git.
+live_config.json
+trades.jsonl
+pnl_ledger.jsonl
+price_history.jsonl
+positions*.json
+*.heartbeat
+*.lock

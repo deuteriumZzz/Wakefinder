@@ -48,7 +48,7 @@ from wakefinder.chains.eth.abi import ERC20_ABI, ROUTER_ABI
 from wakefinder.chains.eth.sender import FlashbotsBundleSender
 from wakefinder.chains.eth.simulator import GAS_LIMIT, KNOWN_DEX_FACTORIES, TwoPoolArbSimulator
 from wakefinder.chains.eth.watcher import UniswapV2Watcher
-from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log
+from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wallet_lock
 from wakefinder.common.adaptive_tip import AdaptiveTipController
 from wakefinder.common.canary import CanaryController
 from wakefinder.common.alerts import send_telegram_alert
@@ -161,6 +161,7 @@ async def run(
 
     settings = get_settings()
     account = Account.from_key(settings.resolved_eth_private_key())
+    _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, account.address, "eth_arb")  # noqa: F841 — держим handle живым весь run(), см. wallet_lock.py
     fb_signer = Account.from_key(settings.resolved_flashbots_signer_key())
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
