@@ -44,6 +44,7 @@ from wakefinder.common.amm import get_amount_out
 from wakefinder.common.exposure import total_token_exposure_eth
 from wakefinder.common.canary import CanaryController
 from wakefinder.common.config import get_settings
+from wakefinder.common.cowswap import ensure_vault_relayer_approved, place_and_wait_for_exit_order
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
 from wakefinder.common.momentum_confirmation import check_eth_pool_momentum
@@ -245,17 +246,40 @@ async def _exit_position(
             _save_positions(positions_file, positions)
     if pos is None:
         return
-    included, amount_out = await _sell(w3, account, router_address, chain_id, weth_address, token, pos.amount_held)
+
+    settings = get_settings()
+    included = False
+    amount_out = 0
+    if settings.exit_via_cowswap:
+        # См. eth/copytrade.py:_exit_position и docstring common/cowswap.py —
+        # только выходы, при любом сбое откат на прямой AMM-своп ниже.
+        try:
+            router = _ENCODER.eth.contract(address=router_address, abi=ROUTER_ABI)
+            quote = await router.functions.getAmountsOut(pos.amount_held, [token, weth_address]).call()
+            amount_out_min = quote[-1] * (10_000 - SLIPPAGE_BPS) // 10_000
+            await ensure_vault_relayer_approved(w3, account, chain_id, token, pos.amount_held)
+            filled, cow_buy_amount = await place_and_wait_for_exit_order(
+                account, chain_id, token, weth_address, pos.amount_held, amount_out_min,
+                settings.cowswap_order_valid_seconds, settings.cowswap_order_poll_timeout_seconds,
+            )
+        except Exception as exc:
+            logger.warning("CoWSwap выход не удался (%s) — откат на прямой AMM-своп", type(exc).__name__)
+            filled, cow_buy_amount = False, 0
+        if filled:
+            included, amount_out = True, cow_buy_amount
+            logger.info("снайп-выход (%s) через CoWSwap: токен=%s получено=%d", reason, token, cow_buy_amount)
+
+    if not included:
+        included, amount_out = await _sell(w3, account, router_address, chain_id, weth_address, token, pos.amount_held)
+
     logger.info("снайп-выход (%s): токен=%s included=%s", reason, token, included)
     trade_log.log_attempt(trade_log_file, "eth", pos.pool_address, amount_out, included, [], strategy="snipe_exit")
     if included:
-        settings = get_settings()
         pnl_ledger.record_closed_trade(
             settings.pnl_ledger_file, "eth", "snipe", amount_out - pos.entry_amount_in_wei,
             token=token, opened_at=pos.opened_at,
         )
     if not included:
-        settings = get_settings()
         send_telegram_alert(
             settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
             f"[wakefinder/eth snipe] выход ({reason}) не попал в блок: токен={token} — позиция потеряна из вида, проверьте вручную",

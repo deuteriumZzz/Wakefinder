@@ -329,6 +329,15 @@ class Settings(BaseSettings):
     liquidation_min_profit_usd: float = Field(default=5.0, gt=0)
     liquidation_gas_limit: int = Field(default=400_000, ge=1)
 
+    # Exit через CoW Protocol (common/cowswap.py) вместо прямого AMM-свопа
+    # для стоп-лосс/trailing-stop выходов в copytrade.py/snipe.py — Tier D
+    # MEV-роадмапа, ТОЛЬКО выходы (см. docstring cowswap.py про то, почему
+    # не входы). При любом сбое — откат на прямой AMM-своп, не блокирует.
+    # По умолчанию выключено.
+    exit_via_cowswap: bool = False
+    cowswap_order_valid_seconds: float = Field(default=180.0, gt=0)
+    cowswap_order_poll_timeout_seconds: float = Field(default=60.0, gt=0)
+
     @model_validator(mode="after")
     def _check_router_allowlisted(self) -> "Settings":
         if self.eth_router_address.lower() not in KNOWN_ROUTERS:

@@ -57,6 +57,7 @@ from wakefinder.common.exposure import total_token_exposure_eth
 from wakefinder.common.canary import CanaryController
 from wakefinder.common.config import get_settings
 from wakefinder.common.consensus import ConsensusTracker
+from wakefinder.common.cowswap import ensure_vault_relayer_approved, place_and_wait_for_exit_order
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.position_sizing import win_rate_size_multiplier
@@ -263,19 +264,42 @@ async def _exit_position(w3, account, router_address, chain_id, token: str, reas
     expected_out = get_amount_out(pos.amount_held, reserve_in, reserve_out)
     amount_out_min = expected_out * (10_000 - SLIPPAGE_BPS) // 10_000
 
-    included, tx_hash = await _send_single_swap(
-        w3, account, router_address, chain_id, [pos.token, pos.token_in], pos.amount_held, amount_out_min
-    )
+    settings = get_settings()
+    included = False
+    tx_hash = ""
+    actual_out = expected_out
+    if settings.exit_via_cowswap:
+        # Выход — не вход: скорость решает НАША проверка цены по таймеру, а
+        # не гонка с чужой pending-транзакцией, поэтому торможение ради
+        # лучшей цены/MEV-защиты через CoW Protocol уместно (см. docstring
+        # common/cowswap.py). При любом сбое — откат на прямой AMM-своп ниже.
+        try:
+            await ensure_vault_relayer_approved(w3, account, chain_id, pos.token, pos.amount_held)
+            filled, cow_buy_amount = await place_and_wait_for_exit_order(
+                account, chain_id, pos.token, pos.token_in, pos.amount_held, amount_out_min,
+                settings.cowswap_order_valid_seconds, settings.cowswap_order_poll_timeout_seconds,
+            )
+        except Exception as exc:
+            logger.warning("CoWSwap выход не удался (%s) — откат на прямой AMM-своп", type(exc).__name__)
+            filled, cow_buy_amount = False, 0
+        if filled:
+            included, actual_out = True, cow_buy_amount
+            logger.info("копитрейд-выход (%s) через CoWSwap: токен=%s получено=%d", reason, token, cow_buy_amount)
+
+    if not included:
+        included, tx_hash = await _send_single_swap(
+            w3, account, router_address, chain_id, [pos.token, pos.token_in], pos.amount_held, amount_out_min
+        )
+        actual_out = expected_out
+
     logger.info("копитрейд-выход (%s): токен=%s included=%s", reason, token, included)
-    trade_log.log_attempt(trade_log_file, "eth", pos.pool_address, expected_out, included, [tx_hash], strategy="copytrade_exit", wallet=pos.watched_wallet)
+    trade_log.log_attempt(trade_log_file, "eth", pos.pool_address, actual_out, included, [tx_hash] if tx_hash else [], strategy="copytrade_exit", wallet=pos.watched_wallet)
     if included:
-        settings = get_settings()
         pnl_ledger.record_closed_trade(
-            settings.pnl_ledger_file, "eth", "copytrade", expected_out - pos.entry_amount_in,
+            settings.pnl_ledger_file, "eth", "copytrade", actual_out - pos.entry_amount_in,
             token=pos.token, wallet=pos.watched_wallet, opened_at=pos.opened_at,
         )
     if reason == "стоп-лосс":
-        settings = get_settings()
         send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, f"[wakefinder/eth copytrade] стоп-лосс: токен={token} included={included}")
 
 

@@ -84,6 +84,13 @@ ERC20_ABI = [
         "inputs": [{"name": "spender", "type": "address"}, {"name": "amount", "type": "uint256"}],
         "outputs": [{"name": "", "type": "bool"}],
     },
+    {
+        "name": "allowance",
+        "type": "function",
+        "inputs": [{"name": "owner", "type": "address"}, {"name": "spender", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+    },
 ]
 
 FACTORY_ABI = [
