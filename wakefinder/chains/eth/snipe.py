@@ -52,6 +52,7 @@ from wakefinder.common.reconnect import with_reconnect
 from wakefinder.common.sandwich_detector import check_own_tx_for_sandwich
 from wakefinder.common.stuck_position import StuckPositionTracker
 from wakefinder.common.trailing_stop import TrailingStopTracker
+from wakefinder.wallet_scanner import check_deployer_reputation
 
 SLIPPAGE_BPS = 300  # шире, чем у арбитража/копитрейдинга (100) — свежесозданный пул волатильнее
 GAS_LIMIT = 250_000
@@ -348,6 +349,14 @@ async def _handle_mined_candidate(
         momentum = await check_eth_pool_momentum(w3, pool.pool_address, pool.block_number, settings.snipe_momentum_min_buys)
         if not momentum.passed:
             logger.info("снайп momentum-подтверждение отклонило пул=%s: %s", pool.pool_address, momentum.reason)
+            return
+
+    if settings.snipe_deployer_reputation_check:
+        deployer_ok = await check_deployer_reputation(
+            w3, pool.tx_hash, settings.etherscan_api_key, settings.snipe_deployer_min_tx_count,
+        )
+        if not deployer_ok:
+            logger.info("снайп отклонил пул=%s: деплойер похож на burner-кошелёк (мало истории на Etherscan)", pool.pool_address)
             return
 
     balance = await w3.eth.get_balance(account.address)

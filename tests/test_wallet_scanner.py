@@ -3,6 +3,7 @@ import asyncio
 from solders.pubkey import Pubkey
 
 from wakefinder.wallet_scanner import (
+    check_deployer_reputation,
     filter_by_etherscan_activity,
     find_candidate_wallets_eth,
     find_candidate_wallets_solana,
@@ -188,10 +189,56 @@ def test_find_candidate_wallets_solana_skips_failed_transactions():
     assert counts == {}
 
 
+# --- check_deployer_reputation ---
+
+class _FakeTxEth:
+    def __init__(self, tx_by_hash):
+        self._tx_by_hash = tx_by_hash
+
+    async def get_transaction(self, tx_hash):
+        return self._tx_by_hash[tx_hash]
+
+
+class _FakeW3ForDeployer:
+    def __init__(self, tx_by_hash):
+        self.eth = _FakeTxEth(tx_by_hash)
+
+
+def test_check_deployer_reputation_no_key_passes():
+    w3 = _FakeW3ForDeployer({"0xTX": {"from": "0xDEPLOYER"}})
+    result = asyncio.run(check_deployer_reputation(w3, "0xTX", api_key="", min_tx_count=10))
+    assert result is True
+
+
+def test_check_deployer_reputation_active_deployer_passes(monkeypatch):
+    import wakefinder.wallet_scanner as scanner
+
+    def fake_get(url, params, timeout):
+        return _FakeResponse(result=[{}] * 50)  # активный кошелёк
+
+    monkeypatch.setattr(scanner.requests, "get", fake_get)
+    w3 = _FakeW3ForDeployer({"0xTX": {"from": "0xDEPLOYER"}})
+    result = asyncio.run(check_deployer_reputation(w3, "0xTX", api_key="fake-key", min_tx_count=10))
+    assert result is True
+
+
+def test_check_deployer_reputation_fresh_deployer_fails(monkeypatch):
+    import wakefinder.wallet_scanner as scanner
+
+    def fake_get(url, params, timeout):
+        return _FakeResponse(result=[{}] * 2)  # свежий burner-кошелёк
+
+    monkeypatch.setattr(scanner.requests, "get", fake_get)
+    w3 = _FakeW3ForDeployer({"0xTX": {"from": "0xDEPLOYER"}})
+    result = asyncio.run(check_deployer_reputation(w3, "0xTX", api_key="fake-key", min_tx_count=10))
+    assert result is False
+
+
 if __name__ == "__main__":
     test_find_candidate_wallets_eth_counts_by_recipient()
     test_find_candidate_wallets_eth_respects_block_range()
     test_filter_by_etherscan_activity_no_key_returns_all()
     test_find_candidate_wallets_solana_counts_owners()
     test_find_candidate_wallets_solana_skips_failed_transactions()
+    test_check_deployer_reputation_no_key_passes()
     print("run monkeypatch-based tests via pytest")

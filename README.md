@@ -794,6 +794,16 @@ vault-аккаунта, который транзакция уже подтве�
   выключено по умолчанию. В backrun-режиме (`SNIPE_BACKRUN_MODE`) не
   применяется — вход идёт в ТОМ ЖЕ блоке, что и создание ликвидности,
   свопов физически ещё не может быть.
+- **Репутация деплойера пула** (`SNIPE_DEPLOYER_REPUTATION_CHECK`/
+  `SNIPE_DEPLOYER_MIN_TX_COUNT`, `wallet_scanner.py:check_deployer_reputation`,
+  только ETH) — переиспользует уже существующий Etherscan-фильтр
+  (`filter_by_etherscan_activity`, тот же, что у CLI-команды `discover`):
+  деплойер пула (адрес, отправивший `PairCreated`-транзакцию) с очень малой
+  историей на Etherscan — классический признак кошелька, созданного
+  специально под один rug. `ETHERSCAN_API_KEY` — общий с `discover`; без
+  него проверка мягко пропускается (не ошибка). Solana-эквивалента нет —
+  Solscan API требует отдельной регистрации и имеет более жёсткие лимиты,
+  честно отложено (см. docstring `wallet_scanner.py`).
 
 ## Tamper-evident аудит-лог (`wakefinder/common/hash_chain.py`)
 

@@ -177,6 +177,12 @@ class Settings(BaseSettings):
     # против уверенности, по умолчанию выключено.
     snipe_momentum_confirmation: bool = False
     snipe_momentum_min_buys: int = Field(default=2, ge=1)
+    # Репутация деплойера пула через Etherscan (wallet_scanner.py:check_deployer_reputation)
+    # — тот же ключ, что у CLI-команды `discover`. Пусто = проверка
+    # пропускается (не ошибка).
+    etherscan_api_key: str = ""
+    snipe_deployer_reputation_check: bool = False
+    snipe_deployer_min_tx_count: int = Field(default=10, ge=1)
     snipe_trailing_stop_check_interval_seconds: float = 15
     snipe_max_concurrent_positions: int = Field(default=3, ge=1)
     # Round-trip симуляция покупки+продажи через flashbots.simulate перед

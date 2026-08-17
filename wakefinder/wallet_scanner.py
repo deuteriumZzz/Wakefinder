@@ -30,6 +30,7 @@ Public API требует отдельной регистрации и имее�
 классический Etherscan API) — честно отложено, не тихий недосмотр.
 """
 
+import asyncio
 import logging
 from collections import Counter
 
@@ -93,6 +94,26 @@ def filter_by_etherscan_activity(candidates: list[str], api_key: str, min_tx_cou
         if tx_count >= min_tx_count:
             survivors.append(address)
     return survivors
+
+
+async def check_deployer_reputation(w3: AsyncWeb3, pool_tx_hash: str, api_key: str, min_tx_count: int) -> bool:
+    """Опциональный анти-burner-wallet фильтр для снайпинга ETH
+    (chains/eth/snipe.py) — деплойер пула (адрес, отправивший транзакцию
+    PairCreated) с ОЧЕНЬ малой историей транзакций — классический признак
+    кошелька, созданного специально под один rug. Переиспользует уже
+    существующую filter_by_etherscan_activity (тот же фильтр, что и
+    discover-команда для watched_wallets), через asyncio.to_thread — она
+    синхронная (requests.get), нельзя звать напрямую из async live-цикла.
+
+    Без api_key возвращает True (проверка пропущена, не блокирует вход) —
+    тот же принцип "мягкого выключения", что у filter_by_etherscan_activity.
+    Solana-эквивалента нет — см. docstring модуля про Solscan API."""
+    if not api_key:
+        return True
+    tx = await w3.eth.get_transaction(pool_tx_hash)
+    deployer = tx["from"]
+    survivors = await asyncio.to_thread(filter_by_etherscan_activity, [deployer], api_key, min_tx_count)
+    return deployer in survivors
 
 
 async def find_candidate_wallets_solana(
