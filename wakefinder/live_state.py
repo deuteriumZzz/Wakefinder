@@ -82,6 +82,7 @@ async def eth_copytrade_positions_live(w3: AsyncWeb3, router_address: str, posit
         out.append({
             "token": token, "entry_amount_in": entry / decimals, "current_value": current_scaled,
             "pnl_pct": _pnl_pct(entry, current), "watched_wallet": pos.get("watched_wallet", ""),
+            "stuck": pos.get("stuck", False),
         })
     return out
 
@@ -104,7 +105,7 @@ async def eth_snipe_positions_live(w3: AsyncWeb3, router_address: str, weth_addr
             log_snapshot(history_path, token, current_scaled)
         out.append({
             "token": token, "entry_amount_in": entry / decimals, "current_value": current_scaled,
-            "pnl_pct": _pnl_pct(entry, current),
+            "pnl_pct": _pnl_pct(entry, current), "stuck": pos.get("stuck", False),
         })
     return out
 
@@ -128,6 +129,7 @@ async def solana_copytrade_positions_live(jupiter, positions: dict, decimals: in
         out.append({
             "token": token, "entry_amount_in": entry / decimals, "current_value": current_scaled,
             "pnl_pct": _pnl_pct(entry, current), "watched_wallet": pos.get("watched_wallet", ""),
+            "stuck": pos.get("stuck", False),
         })
     return out
 
@@ -225,18 +227,18 @@ async def gather_state(settings) -> dict:
     try:
         eth_copytrade_positions = (
             await eth_copytrade_positions_live(w3, settings.eth_router_address, eth_copytrade_raw, history_path=settings.price_history_file) if w3 is not None
-            else _positions_without_live_value(eth_copytrade_raw, 10**18, extra_fields=("watched_wallet",))
+            else _positions_without_live_value(eth_copytrade_raw, 10**18, extra_fields=("watched_wallet", "stuck"))
         )
     except Exception:
-        eth_copytrade_positions = _positions_without_live_value(eth_copytrade_raw, 10**18, extra_fields=("watched_wallet",))
+        eth_copytrade_positions = _positions_without_live_value(eth_copytrade_raw, 10**18, extra_fields=("watched_wallet", "stuck"))
 
     try:
         eth_snipe_positions = (
             await eth_snipe_positions_live(w3, settings.eth_router_address, settings.eth_weth_address, eth_snipe_raw, history_path=settings.price_history_file) if w3 is not None
-            else _positions_without_live_value(eth_snipe_raw, 10**18, wei_field="entry_amount_in_wei")
+            else _positions_without_live_value(eth_snipe_raw, 10**18, wei_field="entry_amount_in_wei", extra_fields=("stuck",))
         )
     except Exception:
-        eth_snipe_positions = _positions_without_live_value(eth_snipe_raw, 10**18, wei_field="entry_amount_in_wei")
+        eth_snipe_positions = _positions_without_live_value(eth_snipe_raw, 10**18, wei_field="entry_amount_in_wei", extra_fields=("stuck",))
 
     state["eth"] = {
         "address": eth_address, "balance": eth_balance,
@@ -265,9 +267,9 @@ async def gather_state(settings) -> dict:
                 sol_copytrade_positions = await solana_copytrade_positions_live(jupiter, sol_copytrade_raw, history_path=settings.price_history_file)
         except Exception as exc:
             state["solana_error"] = f"{type(exc).__name__}: не удалось получить живые Solana-данные"
-            sol_copytrade_positions = _positions_without_live_value(sol_copytrade_raw, 10**9, extra_fields=("watched_wallet",))
+            sol_copytrade_positions = _positions_without_live_value(sol_copytrade_raw, 10**9, extra_fields=("watched_wallet", "stuck"))
     elif sol_copytrade_raw:
-        sol_copytrade_positions = _positions_without_live_value(sol_copytrade_raw, 10**9, extra_fields=("watched_wallet",))
+        sol_copytrade_positions = _positions_without_live_value(sol_copytrade_raw, 10**9, extra_fields=("watched_wallet", "stuck"))
 
     state["solana"] = {"address": sol_address, "balance": sol_balance, "copytrade_positions": sol_copytrade_positions}
 

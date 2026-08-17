@@ -299,8 +299,10 @@ function renderPositions(tbodyId, rows, withWallet) {
     tbody.innerHTML = `<tr><td colspan="${withWallet ? 5 : 4}" class="muted">открытых позиций нет</td></tr>`;
     return;
   }
+  const stuckBadge = ' <span class="bad" title="Не удаётся оценить цену — вероятно rug/высохшая ликвидность">⚠ ЗАВИСЛА</span>';
   tbody.innerHTML = rows.map(p => `
-    <tr><td><a href="#" class="token-link" style="color:var(--accent); cursor:pointer;" data-token="${esc(p.token)}">${short(p.token)}</a></td>
+    <tr${p.stuck ? ' style="background:rgba(220,50,50,0.12);"' : ""}>
+    <td><a href="#" class="token-link" style="color:var(--accent); cursor:pointer;" data-token="${esc(p.token)}">${short(p.token)}</a>${p.stuck ? stuckBadge : ""}</td>
     <td>${num(p.entry_amount_in)}</td><td>${num(p.current_value)}</td>
     <td>${pnlCell(p.pnl_pct)}</td>${withWallet ? `<td>${short(p.watched_wallet)}</td>` : ""}</tr>
   `).join("");

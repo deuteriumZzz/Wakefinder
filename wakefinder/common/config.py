@@ -130,6 +130,11 @@ class Settings(BaseSettings):
     copytrade_size_pct: float = Field(default=2.0, gt=0, le=100)
     copytrade_stop_loss_pct: float = Field(default=20.0, gt=0, le=100)
     copytrade_stop_loss_check_interval_seconds: int = 60
+    # Столько подряд НЕУДАЧНЫХ попыток оценить цену позиции (сбой
+    # getAmountsOut/quote) переводят её в состояние "зависшая" — отличное от
+    # "стоп-лосс/trailing-stop просто ещё не сработал" (цену УДАЁТСЯ узнать,
+    # см. common/stuck_position.py). Один алерт при пересечении порога.
+    stuck_position_threshold: int = Field(default=5, ge=1)
     copytrade_positions_file: str = "positions.json"
     solana_copytrade_positions_file: str = "positions_solana.json"
 

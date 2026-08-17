@@ -42,6 +42,7 @@ from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.race import race_watchers
 from wakefinder.common.reconnect import with_reconnect
+from wakefinder.common.stuck_position import StuckPositionTracker
 from wakefinder.common.trailing_stop import TrailingStopTracker
 
 SLIPPAGE_BPS = 300  # шире дефолта copytrade (100) — свежесозданный пул волатильнее, см. docstring модуля
@@ -55,6 +56,7 @@ class SnipePosition:
     amount_held: int
     entry_amount_in: int  # сколько lamports SOL потрачено на вход
     opened_at: float
+    stuck: bool = False
 
 
 def _load_positions(path: str) -> dict[str, SnipePosition]:
@@ -109,9 +111,27 @@ async def _exit_position(
         )
 
 
+async def _mark_stuck(positions, positions_lock, positions_file, mint: str, stuck: bool) -> None:
+    async with positions_lock:
+        pos = positions.get(mint)
+        if pos is None or pos.stuck == stuck:
+            return
+        pos.stuck = stuck
+        _save_positions(positions_file, positions)
+    settings = get_settings()
+    if stuck:
+        send_telegram_alert(
+            settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
+            f"[wakefinder/solana snipe] позиция ЗАВИСЛА (не удаётся оценить цену {settings.stuck_position_threshold}+ раз подряд): "
+            f"mint={mint} — вероятно rug/высохшая ликвидность, проверьте вручную",
+        )
+    else:
+        logger.info("позиция %s вышла из зависшего состояния — цена снова доступна", mint)
+
+
 async def _trailing_stop_loop(
     client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, trade_log_file, wsol_address: str,
-    trackers: dict[str, TrailingStopTracker], interval_seconds: float,
+    trackers: dict[str, TrailingStopTracker], interval_seconds: float, stuck_tracker: StuckPositionTracker,
 ) -> None:
     while True:
         await asyncio.sleep(interval_seconds)
@@ -120,7 +140,11 @@ async def _trailing_stop_loop(
         for mint, pos in snapshot.items():
             current = await _current_value(jupiter, wsol_address, mint, pos.amount_held)
             if current is None:
+                if stuck_tracker.record_failure(mint):
+                    await _mark_stuck(positions, positions_lock, positions_file, mint, True)
                 continue
+            if stuck_tracker.record_success(mint):
+                await _mark_stuck(positions, positions_lock, positions_file, mint, False)
             tracker = trackers.setdefault(mint, TrailingStopTracker(trail_pct=get_settings().snipe_trailing_stop_pct))
             if tracker.update(current):
                 await _exit_position(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, trade_log_file, wsol_address, mint, "trailing-stop")
@@ -147,6 +171,7 @@ async def run(token_denylist: frozenset[str] = frozenset()):
     positions = _load_positions(settings.solana_snipe_positions_file)
     positions_lock = asyncio.Lock()
     trackers: dict[str, TrailingStopTracker] = {}
+    stuck_tracker = StuckPositionTracker(settings.stuck_position_threshold)
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     last_drawdown_check = 0.0
     last_live_config_check = 0.0
@@ -161,7 +186,7 @@ async def run(token_denylist: frozenset[str] = frozenset()):
         _trailing_stop_loop(
             client, jupiter, sender, keypair, tip, positions, positions_lock,
             settings.solana_snipe_positions_file, settings.trade_log_file, settings.solana_wsol_address,
-            trackers, settings.snipe_trailing_stop_check_interval_seconds,
+            trackers, settings.snipe_trailing_stop_check_interval_seconds, stuck_tracker,
         )
     )
     heartbeat_path = os.path.join(settings.heartbeat_dir, "solana_snipe.heartbeat")

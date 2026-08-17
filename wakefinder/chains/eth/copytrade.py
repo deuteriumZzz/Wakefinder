@@ -61,6 +61,7 @@ from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.position_sizing import win_rate_size_multiplier
 from wakefinder.common.race import race_watchers
 from wakefinder.common.reconnect import with_reconnect
+from wakefinder.common.stuck_position import StuckPositionTracker
 from wakefinder.common.wallet_stats import compute_wallet_stats
 
 SLIPPAGE_BPS = 100
@@ -81,6 +82,7 @@ class Position:
     entry_amount_in: int
     watched_wallet: str
     opened_at: float
+    stuck: bool = False
 
 
 def _load_positions(path: str) -> dict[str, Position]:
@@ -264,7 +266,28 @@ async def _exit_position(w3, account, router_address, chain_id, token: str, reas
         send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, f"[wakefinder/eth copytrade] стоп-лосс: токен={token} included={included}")
 
 
-async def _stop_loss_loop(w3, account, router_address, chain_id, positions, positions_lock, positions_file, trade_log_file, stop_loss_pct, interval_seconds):
+async def _mark_stuck(positions, positions_lock, positions_file, token: str, stuck: bool) -> None:
+    async with positions_lock:
+        pos = positions.get(token.lower())
+        if pos is None or pos.stuck == stuck:
+            return
+        pos.stuck = stuck
+        _save_positions(positions_file, positions)
+    settings = get_settings()
+    if stuck:
+        send_telegram_alert(
+            settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
+            f"[wakefinder/eth copytrade] позиция ЗАВИСЛА (не удаётся оценить цену {settings.stuck_position_threshold}+ раз подряд): "
+            f"токен={token} — вероятно rug/высохшая ликвидность, проверьте вручную",
+        )
+    else:
+        logger.info("позиция %s вышла из зависшего состояния — цена снова доступна", token)
+
+
+async def _stop_loss_loop(
+    w3, account, router_address, chain_id, positions, positions_lock, positions_file, trade_log_file, stop_loss_pct,
+    interval_seconds, stuck_tracker: StuckPositionTracker,
+):
     while True:
         await asyncio.sleep(interval_seconds)
         async with positions_lock:
@@ -275,7 +298,11 @@ async def _stop_loss_loop(w3, account, router_address, chain_id, positions, posi
                 current_value = get_amount_out(pos.amount_held, reserve_in, reserve_out)
             except Exception as exc:
                 logger.warning("не удалось проверить цену позиции %s (%s)", token, type(exc).__name__)
+                if stuck_tracker.record_failure(token):
+                    await _mark_stuck(positions, positions_lock, positions_file, token, True)
                 continue
+            if stuck_tracker.record_success(token):
+                await _mark_stuck(positions, positions_lock, positions_file, token, False)
             floor = pos.entry_amount_in * (100 - stop_loss_pct) // 100
             if current_value < floor:
                 await _exit_position(w3, account, router_address, chain_id, token, "стоп-лосс", positions, positions_lock, positions_file, trade_log_file)
@@ -299,6 +326,7 @@ async def run(
 
     positions = _load_positions(settings.copytrade_positions_file)
     positions_lock = asyncio.Lock()
+    stuck_tracker = StuckPositionTracker(settings.stuck_position_threshold)
     consensus = ConsensusTracker(settings.copytrade_min_consensus_wallets, settings.copytrade_consensus_window_seconds)
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     last_drawdown_check = 0.0
@@ -330,7 +358,7 @@ async def run(
             _stop_loss_loop(
                 w3, account, settings.eth_router_address, chain_id, positions, positions_lock,
                 settings.copytrade_positions_file, settings.trade_log_file, settings.copytrade_stop_loss_pct,
-                settings.copytrade_stop_loss_check_interval_seconds,
+                settings.copytrade_stop_loss_check_interval_seconds, stuck_tracker,
             )
         )
         heartbeat_path = os.path.join(settings.heartbeat_dir, "eth_copytrade.heartbeat")
