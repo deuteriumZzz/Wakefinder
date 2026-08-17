@@ -156,8 +156,8 @@ async def run_discover(args) -> None:
 
         from wakefinder.wallet_scanner import find_candidate_wallets_solana
 
-        client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
-        counts = await find_candidate_wallets_solana(client, args.pools, limit=args.limit)
+        async with AsyncClient(settings.solana_rpc_http_url.get_secret_value()) as client:
+            counts = await find_candidate_wallets_solana(client, args.pools, limit=args.limit)
         ranked = counts.most_common()
 
     ranked = ranked[: args.top]

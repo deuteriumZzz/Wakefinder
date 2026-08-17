@@ -255,10 +255,14 @@ async def gather_state(settings) -> dict:
 
             keypair = Keypair.from_base58_string(settings.resolved_solana_private_key())
             sol_address = str(keypair.pubkey())
-            client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
-            sol_balance = (await client.get_balance(keypair.pubkey())).value / 10**9
-            jupiter = Jupiter(client, keypair)
-            sol_copytrade_positions = await solana_copytrade_positions_live(jupiter, sol_copytrade_raw, history_path=settings.price_history_file)
+            # gather_state() вызывается на КАЖДЫЙ опрос /api/state (каждые
+            # 3-5с с фронта) — без async with AsyncClient создавал бы новую
+            # aiohttp-сессию на каждый опрос и никогда не закрывал её (утечка
+            # сокетов/файловых дескрипторов на долгоживущем дашборде).
+            async with AsyncClient(settings.solana_rpc_http_url.get_secret_value()) as client:
+                sol_balance = (await client.get_balance(keypair.pubkey())).value / 10**9
+                jupiter = Jupiter(client, keypair)
+                sol_copytrade_positions = await solana_copytrade_positions_live(jupiter, sol_copytrade_raw, history_path=settings.price_history_file)
         except Exception as exc:
             state["solana_error"] = f"{type(exc).__name__}: не удалось получить живые Solana-данные"
             sol_copytrade_positions = _positions_without_live_value(sol_copytrade_raw, 10**9, extra_fields=("watched_wallet",))
