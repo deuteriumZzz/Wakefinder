@@ -806,6 +806,31 @@ Solana сознательно не реализован тем же способ
   (`unpkg.com`) прямо в браузере — не добавляет зависимость в
   `pyproject.toml`, тот же принцип, что `telegram-web-app.js` в MiniApp.
 
+## Prometheus/Grafana (`GET /metrics`)
+
+Дашборд отдаёт метрики в стандартном Prometheus text exposition формате —
+переиспользует то же `gather_state()`, что и `/api/state` (не отдельный
+источник правды), просто другой рендер того же снимка состояния.
+
+- **Что публикуется**: `wakefinder_kill_switch_engaged`, `wakefinder_eth_balance`/
+  `wakefinder_sol_balance`, `wakefinder_heartbeat_age_seconds`/`_stale` (per
+  `process`), `wakefinder_trade_attempts_total`/`_included_total`/`_fill_rate`/
+  `_avg_expected_profit`/`_avg_realized_profit`/`_simulation_accuracy` (per
+  `chain`). `None`-значения (например, RPC недоступен) просто не публикуются —
+  Prometheus не поддерживает null, тихое отсутствие сэмпла лучше, чем `0`,
+  который выглядел бы как реальный ноль.
+- **Настройка Prometheus**: обычный `scrape_config` с `metrics_path: /metrics`
+  на адрес дашборда. Если заданы `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` —
+  добавьте `basic_auth: {username, password}` в тот же job (тот же
+  `_check_auth`, что и у `/api/state`, `/metrics` не исключение).
+- **Grafana**: подключается к Prometheus как к datasource, дашборд строится
+  в Grafana поверх метрик выше — сам проект дашборды Grafana не поставляет.
+- **Без новой зависимости**: формат собирается вручную (`wakefinder/live_state.py:render_prometheus`),
+  не через пакет `prometheus_client` — для горстки gauge-метрик собственный
+  рендер проще, чем тянуть библиотеку. `# HELP`/`# TYPE` — ровно один раз на
+  имя метрики перед всеми её сэмплами, как того требует exposition format
+  (несколько таких блоков на одно имя `promtool`/Prometheus отклонят).
+
 ## Разработка
 
 `pytest tests/ -q` — полный набор тестов. `ruff check wakefinder tests` — линт.

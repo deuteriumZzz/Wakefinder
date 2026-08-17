@@ -65,6 +65,22 @@ def test_api_state_returns_gathered_state(tmp_path, monkeypatch):
     assert body["kill_switch_engaged"] is False
 
 
+def test_metrics_returns_prometheus_text(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert "wakefinder_kill_switch_engaged 0" in resp.text
+    assert "wakefinder_eth_balance 1.5" in resp.text
+
+
+def test_metrics_requires_auth_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_USERNAME", "admin")
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")
+    client = _client(tmp_path, monkeypatch)
+    resp = client.get("/metrics")
+    assert resp.status_code == 401
+
+
 def test_index_requires_auth_when_configured(tmp_path, monkeypatch):
     monkeypatch.setenv("DASHBOARD_USERNAME", "admin")
     monkeypatch.setenv("DASHBOARD_PASSWORD", "s3cret")

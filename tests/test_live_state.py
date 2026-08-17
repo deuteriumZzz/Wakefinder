@@ -6,6 +6,7 @@ from wakefinder.live_state import (
     eth_copytrade_positions_live,
     eth_snipe_positions_live,
     gather_state,
+    render_prometheus,
     solana_copytrade_positions_live,
 )
 
@@ -188,6 +189,44 @@ def test_gather_state_still_shows_positions_despite_eth_rpc_failure(tmp_path, mo
     assert len(positions) == 1
     assert positions[0]["entry_amount_in"] == 1.0  # из файла, без RPC
     assert positions[0]["current_value"] is None  # живую оценку получить не удалось — честно, не нулём
+
+
+_PROM_STATE = {
+    "kill_switch_engaged": False,
+    "heartbeats": [{"process": "eth_arb", "age_seconds": 12.3, "stale": False}, {"process": "eth_copytrade", "age_seconds": None, "stale": True}],
+    "metrics": {"eth": {"total_attempts": 10, "included": 8, "fill_rate": 0.8, "avg_expected_profit": 100000.0, "avg_realized_profit": 90000.0, "simulation_accuracy": 0.9}},
+    "eth": {"balance": 1.5},
+    "solana": {"balance": None},
+}
+
+
+def test_render_prometheus_includes_kill_switch_gauge():
+    text = render_prometheus(_PROM_STATE)
+    assert "wakefinder_kill_switch_engaged 0" in text
+
+
+def test_render_prometheus_includes_chain_labeled_metrics():
+    text = render_prometheus(_PROM_STATE)
+    assert 'wakefinder_fill_rate{chain="eth"} 0.8' in text
+    assert 'wakefinder_trade_attempts_total{chain="eth"} 10' in text
+
+
+def test_render_prometheus_includes_heartbeat_gauges_with_process_label():
+    text = render_prometheus(_PROM_STATE)
+    assert 'wakefinder_heartbeat_age_seconds{process="eth_arb"} 12.3' in text
+    assert 'wakefinder_heartbeat_stale{process="eth_copytrade"} 1' in text
+
+
+def test_render_prometheus_omits_none_values_not_crashes():
+    text = render_prometheus(_PROM_STATE)
+    assert "wakefinder_sol_balance" not in text  # solana.balance is None
+    assert "wakefinder_heartbeat_age_seconds{process=\"eth_copytrade\"}" not in text  # age_seconds is None for this process
+
+
+def test_render_prometheus_has_help_and_type_lines():
+    text = render_prometheus(_PROM_STATE)
+    assert "# HELP wakefinder_fill_rate" in text
+    assert "# TYPE wakefinder_fill_rate gauge" in text
 
 
 if __name__ == "__main__":

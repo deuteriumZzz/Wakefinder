@@ -248,3 +248,49 @@ async def gather_state(settings) -> dict:
     state["wallet_stats"] = wallet_stats_view(settings.trade_log_file, prices)
     state["prices"] = prices
     return state
+
+
+def render_prometheus(state: dict) -> str:
+    """Тот же state, что и /api/state (см. gather_state выше) — переиспользует
+    уже вычисленное, не отдельный источник правды. Формат — обычный
+    Prometheus text exposition (https://prometheus.io/docs/instrumenting/exposition_formats/),
+    руками, без пакета prometheus_client — для горстки gauge-метрик стандартный
+    формат проще, чем тянуть библиотеку под него.
+
+    `# HELP`/`# TYPE` — РОВНО один раз на имя метрики, ПЕРЕД всеми её
+    сэмплами (несколько таких блоков на одно имя — невалидный exposition
+    format, Prometheus/promtool это отклонит) — поэтому сначала собираем
+    сэмплы по имени метрики, потом рендерим каждую группу целиком."""
+    families: dict[str, tuple[str, list[tuple[str, object]]]] = {}
+
+    def gauge(name: str, help_text: str, value, labels: str = "") -> None:
+        if value is None:
+            return  # Prometheus не поддерживает null — просто не публикуем сэмпл
+        families.setdefault(name, (help_text, []))[1].append((labels, value))
+
+    gauge("wakefinder_kill_switch_engaged", "1 если kill switch включён, иначе 0", int(state["kill_switch_engaged"]))
+    gauge("wakefinder_eth_balance", "Живой баланс ETH-кошелька", state["eth"]["balance"])
+    gauge("wakefinder_sol_balance", "Живой баланс SOL-кошелька", state["solana"]["balance"])
+
+    for hb in state["heartbeats"]:
+        labels = f'{{process="{hb["process"]}"}}'
+        gauge("wakefinder_heartbeat_age_seconds", "Секунд с последнего heartbeat процесса", hb["age_seconds"], labels)
+        gauge("wakefinder_heartbeat_stale", "1 если heartbeat устарел, иначе 0", int(hb["stale"]), labels)
+
+    for chain, m in state["metrics"].items():
+        labels = f'{{chain="{chain}"}}'
+        gauge("wakefinder_trade_attempts_total", "Всего попыток сделок из trade_log", m["total_attempts"], labels)
+        gauge("wakefinder_trade_included_total", "Сколько попыток попало в блок", m["included"], labels)
+        gauge("wakefinder_fill_rate", "Included / total_attempts", m["fill_rate"], labels)
+        gauge("wakefinder_avg_expected_profit", "Средняя ожидаемая прибыль на попытку, нативные единицы", m["avg_expected_profit"], labels)
+        gauge("wakefinder_avg_realized_profit", "Средняя реализованная прибыль на included-сделку, нативные единицы", m["avg_realized_profit"], labels)
+        gauge("wakefinder_simulation_accuracy", "Среднее отношение realized/expected", m["simulation_accuracy"], labels)
+
+    lines: list[str] = []
+    for name, (help_text, samples) in families.items():
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} gauge")
+        for labels, value in samples:
+            lines.append(f"{name}{labels} {value}")
+
+    return "\n".join(lines) + "\n"

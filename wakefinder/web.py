@@ -24,7 +24,7 @@ import secrets
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
@@ -32,7 +32,7 @@ from wakefinder.common import killswitch
 from wakefinder.common.config import get_settings
 from wakefinder.common.price_history import read_history
 from wakefinder.live_config import load_live_config, save_live_config
-from wakefinder.live_state import gather_state
+from wakefinder.live_state import gather_state, render_prometheus
 from wakefinder.telegram_auth import verify_init_data
 
 security = HTTPBasic(auto_error=False)
@@ -73,6 +73,16 @@ def _check_auth(credentials: HTTPBasicCredentials | None = Depends(security)) ->
 async def api_state() -> JSONResponse:
     settings = get_settings()
     return JSONResponse(await gather_state(settings))
+
+
+@app.get("/metrics", dependencies=[Depends(_check_auth)])
+async def metrics() -> PlainTextResponse:
+    """Prometheus scrape-эндпоинт — тот же _check_auth, что /api/state: если
+    DASHBOARD_USERNAME/PASSWORD заданы, настройте basic_auth в scrape config
+    Prometheus (см. README "Prometheus/Grafana")."""
+    settings = get_settings()
+    state = await gather_state(settings)
+    return PlainTextResponse(render_prometheus(state), media_type="text/plain; version=0.0.4")
 
 
 class LiveConfigPayload(BaseModel):
