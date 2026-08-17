@@ -48,6 +48,7 @@ from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
 from wakefinder.common.momentum_confirmation import check_eth_pool_momentum
 from wakefinder.common.position_reconciliation import find_mismatches
+from wakefinder.common.protected_rpc import send_raw_via_protected_rpc
 from wakefinder.common.reconnect import with_reconnect
 from wakefinder.common.sandwich_detector import check_own_tx_for_sandwich
 from wakefinder.common.social_signal import check_twitter_mentions
@@ -109,10 +110,14 @@ async def _wait_for_receipt(w3: AsyncWeb3, tx_hash) -> bool:
 
 
 async def _send_raw(w3: AsyncWeb3, raw: bytes) -> tuple[bool, str]:
-    if get_settings().dry_run:
+    settings = get_settings()
+    if settings.dry_run:
         logger.info("[DRY RUN] транзакция подписана, реальная отправка в мемпул пропущена")
         return True, "0x" + "0" * 64
-    tx_hash = await w3.eth.send_raw_transaction(raw)
+    if settings.eth_mev_protect_rpc_url:
+        tx_hash = await send_raw_via_protected_rpc(settings.eth_mev_protect_rpc_url, raw)
+    else:
+        tx_hash = await w3.eth.send_raw_transaction(raw)
     ok = await _wait_for_receipt(w3, tx_hash)
     return ok, tx_hash.hex()
 

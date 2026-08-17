@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     # bearer-токена; relay с другой схемой авторизации сюда не впишутся
     # без доработки sender.py, честно не претендуем на универсальность.
     eth_relay_api_keys: str = ""
+    # MEV-protect RPC (Flashbots Protect/MEV Blocker и т.п., common/protected_rpc.py)
+    # — опциональная защита для copytrade/mined-snipe entry, которые
+    # сознательно идут в публичный мемпул ради скорости (см. README
+    # "Momentum-сигналы"/docstring copytrade.py). Пусто = поведение не
+    # меняется (публичный мемпул как раньше).
+    eth_mev_protect_rpc_url: str | None = None
     # Ровно один источник на ключ: plaintext ИЛИ зашифрованный файл (см.
     # common/keystore.py) — не оба и не ни одного. *_KEY_FILE + пассфраза в
     # WALLET_KEY_PASSPHRASE — альтернатива голому ключу в .env; шифрует
