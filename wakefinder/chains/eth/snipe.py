@@ -105,6 +105,9 @@ async def _wait_for_receipt(w3: AsyncWeb3, tx_hash) -> bool:
 
 
 async def _send_raw(w3: AsyncWeb3, raw: bytes) -> tuple[bool, str]:
+    if get_settings().dry_run:
+        logger.info("[DRY RUN] транзакция подписана, реальная отправка в мемпул пропущена")
+        return True, "0x" + "0" * 64
     tx_hash = await w3.eth.send_raw_transaction(raw)
     ok = await _wait_for_receipt(w3, tx_hash)
     return ok, tx_hash.hex()
@@ -483,7 +486,7 @@ async def run(factory_address: str | None = None, token_denylist: frozenset[str]
     # реальные вход/выход по-прежнему идут в публичный мемпул (см. docstring
     # модуля). В SNIPE_BACKRUN_MODE этот же sender ещё и реально ОТПРАВЛЯЕТ
     # бандл входа (_buy_backrun) — тот же relay-клиент, не отдельный.
-    sender = FlashbotsBundleSender(rpc_url=settings.eth_rpc_http_url.get_secret_value(), signer_account=fb_signer)
+    sender = FlashbotsBundleSender(rpc_url=settings.eth_rpc_http_url.get_secret_value(), signer_account=fb_signer, dry_run=settings.dry_run)
 
     token_denylist = {a.lower() for a in token_denylist}
     live_config.seed_if_missing(settings.live_config_file, set(), set(), token_denylist)

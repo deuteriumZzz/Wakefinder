@@ -249,7 +249,7 @@ async def run(
     _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, str(keypair.pubkey()), "solana_copytrade")
     client = AsyncClient(settings.solana_rpc_http_url.get_secret_value())
     jupiter = Jupiter(client, keypair)
-    sender = JitoBundleSender(settings.jito_block_engine_url, keypair)
+    sender = JitoBundleSender(settings.jito_block_engine_url, keypair, dry_run=settings.dry_run)
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
 
     # Мутируемые копии — живой конфиг (wakefinder/live_config.py) обновляет

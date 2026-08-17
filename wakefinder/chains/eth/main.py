@@ -212,6 +212,7 @@ async def run(
             # ПОЗИЦИОННО к relay_urls — пустая строка на позиции ≠ "пропустить",
             # значит "для ЭТОГО relay без доп. авторизации" (см. docstring config.py).
             relay_api_keys=[k.strip() for k in settings.eth_relay_api_keys.split(",")],
+            dry_run=settings.dry_run,
         )
 
         watch_streams = [(lambda w=watcher: with_reconnect(w.watch)) for watcher in watchers]

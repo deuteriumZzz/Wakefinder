@@ -30,6 +30,7 @@ asyncio.to_thread, а не попытка протащить async-поддер�
 """
 
 import asyncio
+import logging
 
 from eth_account.signers.local import LocalAccount
 from flashbots import Flashbots, attach_modules, construct_flashbots_middleware, flashbot
@@ -39,6 +40,8 @@ from web3 import HTTPProvider, Web3
 from wakefinder.common.interfaces import Bundle, BundleSender
 
 DEFAULT_RELAY_URLS = ["https://relay.flashbots.net"]
+
+logger = logging.getLogger("wakefinder.eth.sender")
 
 
 class _AuthedFlashbotProvider(FlashbotProvider):
@@ -71,7 +74,7 @@ def _flashbot_client(rpc_url: str, signer_account: LocalAccount, relay_url: str,
 class FlashbotsBundleSender(BundleSender):
     def __init__(
         self, rpc_url: str, signer_account: LocalAccount, relay_urls: list[str] | None = None,
-        relay_api_keys: list[str] | None = None,
+        relay_api_keys: list[str] | None = None, dry_run: bool = False,
     ):
         urls = relay_urls or DEFAULT_RELAY_URLS
         keys = (relay_api_keys or []) + [""] * len(urls)  # короче списка URL -> остальным пусто, см. docstring config.py
@@ -79,6 +82,7 @@ class FlashbotsBundleSender(BundleSender):
             _flashbot_client(rpc_url, signer_account, relay_url, api_key)
             for relay_url, api_key in zip(urls, keys)
         ]
+        self._dry_run = dry_run
 
     def _simulate_sync(self, raw_txs: list[str], target_block: int) -> dict:
         fb_bundle = [{"signed_transaction": raw} for raw in raw_txs]
@@ -90,6 +94,10 @@ class FlashbotsBundleSender(BundleSender):
         simulation = self._simulate_sync(bundle.raw_txs, bundle.target_block)
         if simulation.get("error") or any(tx.get("error") for tx in simulation.get("results", [])):
             return False
+
+        if self._dry_run:
+            logger.info("[DRY RUN] бандл прошёл симуляцию, реальная отправка пропущена (target_block=%d)", bundle.target_block)
+            return True
 
         fb_bundle = [{"signed_transaction": raw} for raw in bundle.raw_txs]
         pending_results = []

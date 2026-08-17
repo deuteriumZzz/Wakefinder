@@ -9,17 +9,21 @@ asyncio.to_thread — тот же приём, что и с `flashbots` на ст
 
 import asyncio
 import base64
+import logging
 
 from jito_py_rpc import JitoJsonRpcSDK
 from solders.keypair import Keypair
 
 from wakefinder.common.interfaces import Bundle, BundleSender
 
+logger = logging.getLogger("wakefinder.solana.sender")
+
 
 class JitoBundleSender(BundleSender):
-    def __init__(self, jito_block_engine_url: str, keypair: Keypair):
+    def __init__(self, jito_block_engine_url: str, keypair: Keypair, dry_run: bool = False):
         self.jito = JitoJsonRpcSDK(url=jito_block_engine_url)
         self.keypair = keypair
+        self._dry_run = dry_run
 
     def _get_tip_account_sync(self) -> str | None:
         return self.jito.get_random_tip_account()
@@ -34,6 +38,9 @@ class JitoBundleSender(BundleSender):
         return account
 
     def _send_sync(self, bundle: Bundle) -> bool:
+        if self._dry_run:
+            logger.info("[DRY RUN] bundle собран, реальная отправка в Jito пропущена (%d tx)", len(bundle.raw_txs))
+            return True
         response = self.jito.send_bundle(params=bundle.raw_txs)
         if not response.get("success"):
             return False

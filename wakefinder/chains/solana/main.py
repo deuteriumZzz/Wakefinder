@@ -128,7 +128,7 @@ async def run(
     ws_urls += [u.strip() for u in settings.solana_rpc_ws_urls.split(",") if u.strip()]
     watchers = [RaydiumVaultWatcher(url, pools, min_amount_in) for url in ws_urls]
     simulator = TwoPoolArbSimulator(client, reference_pools, settings.solana_wsol_address, jupiter)
-    sender = JitoBundleSender(settings.jito_block_engine_url, keypair)
+    sender = JitoBundleSender(settings.jito_block_engine_url, keypair, dry_run=settings.dry_run)
     tip = AdaptiveTipController(initial_bps=settings.profit_share_bps)
     canary = CanaryController(settings, settings.canary_start_fraction, settings.canary_ramp_trades)
     consecutive_failures = 0
