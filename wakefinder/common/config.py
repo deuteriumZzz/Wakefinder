@@ -167,6 +167,10 @@ class Settings(BaseSettings):
     snipe_test_amount_eth: float = 0.01
     snipe_min_liquidity_weth: float = 1.0
     snipe_trailing_stop_pct: float = Field(default=30.0, gt=0, le=100)
+    # Доп. быстрый триггер выхода поверх trail_pct — обвал на N%+ МЕЖДУ ДВУМЯ
+    # последними проверками (не кумулятивно от пика, см. docstring
+    # common/trailing_stop.py). По умолчанию выключен.
+    snipe_momentum_reversal_pct: float | None = Field(default=None, gt=0, le=100)
     snipe_trailing_stop_check_interval_seconds: float = 15
     snipe_max_concurrent_positions: int = Field(default=3, ge=1)
     # Round-trip симуляция покупки+продажи через flashbots.simulate перед

@@ -148,7 +148,7 @@ async def _trailing_stop_loop(
                 continue
             if stuck_tracker.record_success(mint):
                 await _mark_stuck(positions, positions_lock, positions_file, mint, False)
-            tracker = trackers.setdefault(mint, TrailingStopTracker(trail_pct=get_settings().snipe_trailing_stop_pct))
+            tracker = trackers.setdefault(mint, TrailingStopTracker(trail_pct=get_settings().snipe_trailing_stop_pct, momentum_reversal_pct=get_settings().snipe_momentum_reversal_pct))
             if tracker.update(current):
                 await _exit_position(client, jupiter, sender, keypair, tip, positions, positions_lock, positions_file, trade_log_file, wsol_address, mint, "trailing-stop")
                 trackers.pop(mint, None)
@@ -297,7 +297,7 @@ async def run(token_denylist: frozenset[str] = frozenset()):
                 positions[new_mint.mint_address] = SnipePosition(
                     mint=new_mint.mint_address, amount_held=bought_amount, entry_amount_in=amount_in, opened_at=time.time(),
                 )
-                trackers[new_mint.mint_address] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct)
+                trackers[new_mint.mint_address] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct, momentum_reversal_pct=settings.snipe_momentum_reversal_pct)
                 _save_positions(settings.solana_snipe_positions_file, positions)
     finally:
         trailing_task.cancel()

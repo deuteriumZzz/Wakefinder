@@ -303,7 +303,7 @@ async def _trailing_stop_loop(
                 continue
             if stuck_tracker.record_success(token):
                 await _mark_stuck(positions, positions_lock, positions_file, token, False)
-            tracker = trackers.setdefault(token, TrailingStopTracker(trail_pct=get_settings().snipe_trailing_stop_pct))
+            tracker = trackers.setdefault(token, TrailingStopTracker(trail_pct=get_settings().snipe_trailing_stop_pct, momentum_reversal_pct=get_settings().snipe_momentum_reversal_pct))
             if tracker.update(current):
                 await _exit_position(
                     w3, account, router_address, chain_id, weth_address, positions, positions_lock,
@@ -380,7 +380,7 @@ async def _handle_mined_candidate(
             token=result.token, pool_address=pool.pool_address, amount_held=bought_amount,
             entry_amount_in_wei=amount_in, opened_at=time.time(), approved=False,
         )
-        trackers[result.token] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct)
+        trackers[result.token] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct, momentum_reversal_pct=settings.snipe_momentum_reversal_pct)
         _save_positions(settings.snipe_positions_file, positions)
 
     await _approve(w3, account, settings.eth_router_address, chain_id, result.token)
@@ -463,7 +463,7 @@ async def _handle_backrun_candidate(
             token=token, pool_address="", amount_held=bought_amount,
             entry_amount_in_wei=amount_in, opened_at=time.time(), approved=False,
         )
-        trackers[token] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct)
+        trackers[token] = TrailingStopTracker(trail_pct=settings.snipe_trailing_stop_pct, momentum_reversal_pct=settings.snipe_momentum_reversal_pct)
         _save_positions(settings.snipe_positions_file, positions)
 
     await _approve(w3, account, settings.eth_router_address, chain_id, token)
