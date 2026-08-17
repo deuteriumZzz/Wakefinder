@@ -47,6 +47,18 @@ class PendingLiquidityAdd:
 
 
 @dataclass
+class NewMint:
+    """Только что созданный SPL-минт на Solana (InitializeMint/InitializeMint2
+    Token Program) — аналог NewPool для ETH, но БЕЗ гарантии, что у минта
+    вообще будет ликвидность (mint != пул) — см. chains/solana/mint_watcher.py
+    и snipe_filter.py:check_mint_tradeable (подтверждение через Jupiter)."""
+
+    tx_hash: str
+    mint_address: str
+    slot: int
+
+
+@dataclass
 class SimResult:
     """Результат симуляции стратегии по конкретному pending-свопу.
 
