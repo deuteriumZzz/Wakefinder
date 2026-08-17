@@ -1004,16 +1004,23 @@ vault-аккаунта, который транзакция уже подтве�
 - **Что публикуется**: `wakefinder_kill_switch_engaged`, `wakefinder_eth_balance`/
   `wakefinder_sol_balance`, `wakefinder_heartbeat_age_seconds`/`_stale` (per
   `process`), `wakefinder_trade_attempts_total`/`_included_total`/`_fill_rate`/
-  `_avg_expected_profit`/`_avg_realized_profit`/`_simulation_accuracy` (per
-  `chain`). `None`-значения (например, RPC недоступен) просто не публикуются —
-  Prometheus не поддерживает null, тихое отсутствие сэмпла лучше, чем `0`,
-  который выглядел бы как реальный ноль.
+  `_avg_expected_profit`/`_avg_realized_profit`/`_simulation_accuracy`/
+  `_avg_latency_ms`/`_median_latency_ms` (per `chain`), `wakefinder_strategy_trades_total`/
+  `_win_rate`/`_win_rate_recent`/`_win_rate_drift`/`_sharpe`/`_sortino` (per
+  `chain`+`strategy`, см. "Sharpe/Sortino" выше). `None`-значения (например,
+  RPC недоступен, либо Sharpe/Sortino не определены при <2 сделках) просто
+  не публикуются — Prometheus не поддерживает null, тихое отсутствие сэмпла
+  лучше, чем `0`, который выглядел бы как реальный ноль.
 - **Настройка Prometheus**: обычный `scrape_config` с `metrics_path: /metrics`
   на адрес дашборда. Если заданы `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` —
   добавьте `basic_auth: {username, password}` в тот же job (тот же
   `_check_auth`, что и у `/api/state`, `/metrics` не исключение).
-- **Grafana**: подключается к Prometheus как к datasource, дашборд строится
-  в Grafana поверх метрик выше — сам проект дашборды Grafana не поставляет.
+- **Grafana**: готовый дашборд — `deploy/grafana/wakefinder-dashboard.json`,
+  импортируется через Dashboards -> Import -> Upload JSON, при импорте
+  Grafana спросит Prometheus datasource (`${DS_PROMETHEUS}` в файле).
+  Покрывает ВСЕ метрики выше: overview (kill switch/балансы/heartbeat),
+  fill rate/latency/simulation accuracy по сети, Sharpe/Sortino/win-rate
+  дрифт по стратегии.
 - **Без новой зависимости**: формат собирается вручную (`wakefinder/live_state.py:render_prometheus`),
   не через пакет `prometheus_client` — для горстки gauge-метрик собственный
   рендер проще, чем тянуть библиотеку. `# HELP`/`# TYPE` — ровно один раз на
