@@ -48,6 +48,7 @@ from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
 from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.reconnect import with_reconnect
+from wakefinder.common.sandwich_detector import check_own_tx_for_sandwich
 from wakefinder.common.stuck_position import StuckPositionTracker
 from wakefinder.common.trailing_stop import TrailingStopTracker
 
@@ -253,6 +254,21 @@ async def _exit_position(
         )
 
 
+async def _check_sandwich(w3: AsyncWeb3, tx_hash: str, token: str) -> None:
+    """См. eth/copytrade.py:_check_sandwich — тот же принцип, только для
+    mined-path снайп-входа (единственный вход этого файла, который реально
+    идёт в публичный мемпул — backrun-путь идёт бандлом через Flashbots)."""
+    result = await check_own_tx_for_sandwich(w3, tx_hash)
+    if not result.likely_sandwiched:
+        return
+    logger.warning("снайп-вход по токену %s похож на sandwich (front-run/back-run с %s): tx=%s", token, result.front_run_from, tx_hash)
+    settings = get_settings()
+    send_telegram_alert(
+        settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
+        f"[wakefinder/eth snipe] вход по токену {token} похож на sandwich-атаку (front-run/back-run с одного адреса {result.front_run_from}): tx={tx_hash}",
+    )
+
+
 async def _mark_stuck(positions, positions_lock, positions_file, token: str, stuck: bool) -> None:
     async with positions_lock:
         pos = positions.get(token)
@@ -350,6 +366,9 @@ async def _handle_mined_candidate(
     trade_log.log_attempt(settings.trade_log_file, "eth", pool.pool_address, amount_in, included, [tx_hash], strategy="snipe_entry", latency_ms=latency_ms)
     if not included:
         return
+
+    if not settings.dry_run:
+        asyncio.create_task(_check_sandwich(w3, tx_hash, result.token))
 
     # Позиция сохраняется СРАЗУ после подтверждённой покупки, ДО _approve —
     # approve это отдельная RPC-транзакция (сетевой round-trip), и если

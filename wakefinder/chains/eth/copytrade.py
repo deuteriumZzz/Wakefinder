@@ -62,6 +62,7 @@ from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.position_sizing import win_rate_size_multiplier
 from wakefinder.common.race import race_watchers
 from wakefinder.common.reconnect import with_reconnect
+from wakefinder.common.sandwich_detector import check_own_tx_for_sandwich
 from wakefinder.common.stuck_position import StuckPositionTracker
 from wakefinder.common.wallet_stats import compute_wallet_stats
 
@@ -233,6 +234,9 @@ async def _try_enter(
     if not included:
         return
 
+    if not settings.dry_run:
+        asyncio.create_task(_check_sandwich(w3, tx_hash, token_out))
+
     async with positions_lock:
         positions[token_out.lower()] = Position(
             token=token_out, token_in=token_in, pool_address=pool_address,
@@ -268,6 +272,21 @@ async def _exit_position(w3, account, router_address, chain_id, token: str, reas
     if reason == "стоп-лосс":
         settings = get_settings()
         send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, f"[wakefinder/eth copytrade] стоп-лосс: токен={token} included={included}")
+
+
+async def _check_sandwich(w3: AsyncWeb3, tx_hash: str, token: str) -> None:
+    """Fire-and-forget постфактум-проверка — не блокирует основной цикл
+    (см. docstring common/sandwich_detector.py про честную границу этой
+    детекции)."""
+    result = await check_own_tx_for_sandwich(w3, tx_hash)
+    if not result.likely_sandwiched:
+        return
+    logger.warning("вход по токену %s похож на sandwich (front-run/back-run с %s): tx=%s", token, result.front_run_from, tx_hash)
+    settings = get_settings()
+    send_telegram_alert(
+        settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
+        f"[wakefinder/eth copytrade] вход по токену {token} похож на sandwich-атаку (front-run/back-run с одного адреса {result.front_run_from}): tx={tx_hash}",
+    )
 
 
 async def _mark_stuck(positions, positions_lock, positions_file, token: str, stuck: bool) -> None:
