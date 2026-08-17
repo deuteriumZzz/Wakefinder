@@ -171,6 +171,12 @@ class Settings(BaseSettings):
     # последними проверками (не кумулятивно от пика, см. docstring
     # common/trailing_stop.py). По умолчанию выключен.
     snipe_momentum_reversal_pct: float | None = Field(default=None, gt=0, le=100)
+    # On-chain momentum-подтверждение ВХОДА (см. common/momentum_confirmation.py)
+    # — ждём min_buys подтверждающих свопов/подписей перед покупкой. ДОБАВЛЯЕТ
+    # задержку входа (RPC-раунд-трип) — сознательный компромисс скорости
+    # против уверенности, по умолчанию выключено.
+    snipe_momentum_confirmation: bool = False
+    snipe_momentum_min_buys: int = Field(default=2, ge=1)
     snipe_trailing_stop_check_interval_seconds: float = 15
     snipe_max_concurrent_positions: int = Field(default=3, ge=1)
     # Round-trip симуляция покупки+продажи через flashbots.simulate перед

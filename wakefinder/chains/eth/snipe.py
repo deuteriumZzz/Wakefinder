@@ -46,6 +46,7 @@ from wakefinder.common.canary import CanaryController
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
 from wakefinder.common.interfaces import Bundle
+from wakefinder.common.momentum_confirmation import check_eth_pool_momentum
 from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.reconnect import with_reconnect
 from wakefinder.common.sandwich_detector import check_own_tx_for_sandwich
@@ -341,6 +342,12 @@ async def _handle_mined_candidate(
         )
         if not round_trip.passed:
             logger.info("снайп round-trip проверка отклонила токен=%s: %s", result.token, round_trip.reason)
+            return
+
+    if settings.snipe_momentum_confirmation:
+        momentum = await check_eth_pool_momentum(w3, pool.pool_address, pool.block_number, settings.snipe_momentum_min_buys)
+        if not momentum.passed:
+            logger.info("снайп momentum-подтверждение отклонило пул=%s: %s", pool.pool_address, momentum.reason)
             return
 
     balance = await w3.eth.get_balance(account.address)

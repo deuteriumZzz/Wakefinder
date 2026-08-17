@@ -42,6 +42,7 @@ from wakefinder.common.canary import CanaryController
 from wakefinder.common.exposure import total_token_exposure_solana
 from wakefinder.common.config import get_settings
 from wakefinder.common.drawdown import check_drawdown
+from wakefinder.common.momentum_confirmation import check_solana_mint_momentum
 from wakefinder.common.race import race_watchers
 from wakefinder.common.position_reconciliation import find_mismatches
 from wakefinder.common.reconnect import with_reconnect
@@ -268,6 +269,12 @@ async def run(token_denylist: frozenset[str] = frozenset()):
             if not result.passed:
                 logger.info("снайп-фильтр отклонил mint=%s: %s", new_mint.mint_address, result.reason)
                 continue
+
+            if settings.snipe_momentum_confirmation:
+                momentum = await check_solana_mint_momentum(client, new_mint.mint_address, settings.snipe_momentum_min_buys)
+                if not momentum.passed:
+                    logger.info("снайп momentum-подтверждение отклонило mint=%s: %s", new_mint.mint_address, momentum.reason)
+                    continue
 
             balance = (await client.get_balance(keypair.pubkey())).value
             amount_in = int(balance * settings.snipe_size_pct / 100)
