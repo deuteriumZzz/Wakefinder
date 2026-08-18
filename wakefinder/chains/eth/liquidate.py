@@ -76,19 +76,26 @@ class LiquidationProfitEstimate:
 async def _estimate_profit(
     oracle, data_provider, weth_address: str,
     debt_asset: str, collateral_asset: str, debt_to_cover: int, gas_price: int, gas_limit: int,
+    block_identifier: int | None = None,
 ) -> LiquidationProfitEstimate:
     """Профит = discount (liquidationBonus), который протокол платит
-    ликвидатору поверх стоимости погашенного долга, минус оценка газа."""
-    debt_price = await oracle.functions.getAssetPrice(debt_asset).call()
-    debt_config = await data_provider.functions.getReserveConfigurationData(debt_asset).call()
-    collateral_config = await data_provider.functions.getReserveConfigurationData(collateral_asset).call()
+    ликвидатору поверх стоимости погашенного долга, минус оценка газа.
+
+    block_identifier — None (по умолчанию) значит "последний блок", как и
+    раньше (live-путь в _handle_pending_liquidation его не передаёт).
+    Передаётся explicitly в liquidate_backtest.py для реплея исторических
+    цен оракула/конфига резервов на конкретном блоке — тот же приём, что
+    router.getAmountsOut(...).call(block_identifier=...) в simulator.py."""
+    debt_price = await oracle.functions.getAssetPrice(debt_asset).call(block_identifier=block_identifier)
+    debt_config = await data_provider.functions.getReserveConfigurationData(debt_asset).call(block_identifier=block_identifier)
+    collateral_config = await data_provider.functions.getReserveConfigurationData(collateral_asset).call(block_identifier=block_identifier)
     debt_decimals = debt_config[0]
     liquidation_bonus_bps = collateral_config[3]
 
     debt_covered_usd = debt_to_cover * debt_price / 10**debt_decimals / 10**ORACLE_DECIMALS
     gross_profit_usd = debt_covered_usd * (liquidation_bonus_bps - 10_000) / 10_000
 
-    eth_price = await oracle.functions.getAssetPrice(weth_address).call()
+    eth_price = await oracle.functions.getAssetPrice(weth_address).call(block_identifier=block_identifier)
     gas_cost_usd = gas_price * gas_limit / 10**18 * eth_price / 10**ORACLE_DECIMALS
 
     return LiquidationProfitEstimate(profit_usd=gross_profit_usd - gas_cost_usd, eth_price_usd_e8=eth_price)

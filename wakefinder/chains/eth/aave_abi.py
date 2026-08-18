@@ -55,6 +55,20 @@ AAVE_POOL_ABI = [
             {"name": "referralCode", "type": "uint16", "indexed": True},
         ],
     },
+    {
+        "name": "LiquidationCall",
+        "type": "event",
+        "anonymous": False,
+        "inputs": [
+            {"name": "collateralAsset", "type": "address", "indexed": True},
+            {"name": "debtAsset", "type": "address", "indexed": True},
+            {"name": "user", "type": "address", "indexed": True},
+            {"name": "debtToCover", "type": "uint256", "indexed": False},
+            {"name": "liquidatedCollateralAmount", "type": "uint256", "indexed": False},
+            {"name": "liquidator", "type": "address", "indexed": False},
+            {"name": "receiveAToken", "type": "bool", "indexed": False},
+        ],
+    },
 ]
 
 AAVE_POOL_DATA_PROVIDER_ABI = [

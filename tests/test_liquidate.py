@@ -14,7 +14,7 @@ class _Call:
     def __init__(self, value):
         self._value = value
 
-    async def call(self):
+    async def call(self, block_identifier=None):
         return self._value
 
 
