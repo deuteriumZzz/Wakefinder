@@ -207,22 +207,44 @@ async def _handle_pending_swap(
     return True
 
 
-async def run() -> None:
+def _resolve_weth_side(token0: str, token1: str, weth: str) -> str:
+    if token0.lower() == weth:
+        return "token0"
+    if token1.lower() == weth:
+        return "token1"
+    raise RuntimeError("JIT: ни token0, ни token1 пула не совпадает с ETH_WETH_ADDRESS; см. README 'JIT-ликвидность' про WETH-сторону, обязательную для расчёта PnL")
+
+
+async def _watch_pool_into_queue(watcher: V3LargeSwapWatcher, pool_ctx: dict, queue: "asyncio.Queue[tuple[dict, PendingLargeSwap]]") -> None:
+    """Один producer-таск на пул — отдельная with_reconnect-подписка на КАЖДЫЙ
+    пул (обрыв соединения по одному пулу не блокирует остальные), все события
+    сливаются в общую очередь. Основной цикл в run() забирает из неё
+    ПОСЛЕДОВАТЕЛЬНО — это то, что позволяет нескольким пулам шарить один
+    account/nonce без блокировки: обработка (nonce -> sign -> send) никогда
+    не идёт параллельно между пулами, только сама подписка на мемпул."""
+    async for pending in with_reconnect(watcher.watch):
+        await queue.put((pool_ctx, pending))
+
+
+async def run(pools: list[dict] | None = None) -> None:
+    """pools=None (по умолчанию) — старое поведение, один пул из JIT_POOL_*
+    настроек. pools=[{"pool_address", "token0", "token1", "fee",
+    "capital0_wei", "capital1_wei"}, ...] — несколько пулов одним процессом/
+    кошельком (см. [[jit_pools]] в cli.py и configs/eth-jit-multi.toml)."""
     settings = get_settings()
     account = Account.from_key(settings.resolved_eth_private_key())
     _wallet_lock_handle = wallet_lock.acquire_wallet_lock(settings.heartbeat_dir, account.address, "eth_jit_liquidity")  # noqa: F841 — держим handle живым весь run(), см. wallet_lock.py
     fb_signer = Account.from_key(settings.resolved_flashbots_signer_key())
 
-    token0 = Web3.to_checksum_address(settings.jit_pool_token0)
-    token1 = Web3.to_checksum_address(settings.jit_pool_token1)
-    weth = settings.eth_weth_address.lower()
-    if token0.lower() == weth:
-        weth_side = "token0"
-    elif token1.lower() == weth:
-        weth_side = "token1"
-    else:
-        raise RuntimeError("JIT_POOL_TOKEN0/JIT_POOL_TOKEN1 — ни один не совпадает с ETH_WETH_ADDRESS; см. README 'JIT-ликвидность' про WETH-сторону, обязательную для расчёта PnL")
+    if pools is None:
+        pools = [{
+            "pool_address": settings.jit_pool_address, "token0": settings.jit_pool_token0, "token1": settings.jit_pool_token1,
+            "fee": settings.jit_pool_fee, "capital0_wei": settings.jit_capital0_wei, "capital1_wei": settings.jit_capital1_wei,
+        }]
+    if not pools:
+        raise RuntimeError("JIT: пустой список пулов — нечего делать (см. JIT_POOL_ADDRESS или [[jit_pools]] в профиле)")
 
+    weth = settings.eth_weth_address.lower()
     last_drawdown_check = 0.0
     consecutive_failures = 0
 
@@ -231,14 +253,6 @@ async def run() -> None:
         chain_id = await w3.eth.chain_id
 
         npm = w3.eth.contract(address=Web3.to_checksum_address(settings.jit_npm_address), abi=NPM_ABI)
-        pool = w3.eth.contract(address=Web3.to_checksum_address(settings.jit_pool_address), abi=POOL_ABI)
-        tick_spacing = await pool.functions.tickSpacing().call()
-
-        if not settings.dry_run:
-            await _approve_token(w3, account, settings.jit_npm_address, chain_id, token0)
-            await _approve_token(w3, account, settings.jit_npm_address, chain_id, token1)
-
-        watcher = V3LargeSwapWatcher(w3, settings.jit_swap_router_address, token0, token1, settings.jit_pool_fee, int(settings.jit_min_swap_amount_in_wei))
         sender = FlashbotsBundleSender(
             rpc_url=settings.eth_rpc_http_url.get_secret_value(),
             signer_account=fb_signer,
@@ -247,11 +261,35 @@ async def run() -> None:
             dry_run=settings.dry_run,
         )
 
+        queue: asyncio.Queue = asyncio.Queue()
+        approved_tokens: set[str] = set()
+        producer_tasks = []
+        for p in pools:
+            token0 = Web3.to_checksum_address(p["token0"])
+            token1 = Web3.to_checksum_address(p["token1"])
+            weth_side = _resolve_weth_side(token0, token1, weth)  # проверка на СТАРТЕ, до подписки — fail loud, не на первом свопе
+
+            pool_contract = w3.eth.contract(address=Web3.to_checksum_address(p["pool_address"]), abi=POOL_ABI)
+            tick_spacing = await pool_contract.functions.tickSpacing().call()
+
+            if not settings.dry_run:
+                for token in (token0, token1):
+                    if token not in approved_tokens:
+                        await _approve_token(w3, account, settings.jit_npm_address, chain_id, token)
+                        approved_tokens.add(token)
+
+            pool_ctx = {
+                "pool": pool_contract, "token0": token0, "token1": token1, "fee": int(p["fee"]), "tick_spacing": tick_spacing,
+                "weth_side": weth_side, "capital0": int(p["capital0_wei"]), "capital1": int(p["capital1_wei"]),
+            }
+            watcher = V3LargeSwapWatcher(w3, settings.jit_swap_router_address, token0, token1, int(p["fee"]), int(settings.jit_min_swap_amount_in_wei))
+            producer_tasks.append(asyncio.create_task(_watch_pool_into_queue(watcher, pool_ctx, queue)))
+
         heartbeat_path = os.path.join(settings.heartbeat_dir, "eth_jit_liquidity.heartbeat")
         heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
         try:
-            async for pending in with_reconnect(watcher.watch):
+            while True:
                 if killswitch.is_engaged(settings.kill_switch_file):
                     logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
                     send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, "[wakefinder/eth jit] kill switch присутствует — бот остановлен")
@@ -270,9 +308,10 @@ async def run() -> None:
                         killswitch.engage(settings.kill_switch_file, "drawdown breach: eth jit_liquidity")
                         return
 
+                pool_ctx, pending = await queue.get()
                 included = await _handle_pending_swap(
-                    w3, account, chain_id, settings, sender, pool, npm, token0, token1, settings.jit_pool_fee, tick_spacing,
-                    weth_side, int(settings.jit_capital0_wei), int(settings.jit_capital1_wei), pending,
+                    w3, account, chain_id, settings, sender, pool_ctx["pool"], npm, pool_ctx["token0"], pool_ctx["token1"],
+                    pool_ctx["fee"], pool_ctx["tick_spacing"], pool_ctx["weth_side"], pool_ctx["capital0"], pool_ctx["capital1"], pending,
                 )
                 if included is None:
                     continue  # пропуск (нулевая ликвидность/RPC-ошибка получения raw tx) — не попытка, счётчик не трогаем
@@ -292,3 +331,5 @@ async def run() -> None:
                     return
         finally:
             heartbeat_task.cancel()
+            for task in producer_tasks:
+                task.cancel()

@@ -3,6 +3,7 @@ import os
 import pytest
 
 from wakefinder.cli import (
+    _jit_pools_from_profile,
     _pool_registry_from_profile,
     _reference_pools_from_profile,
     _solana_pools_from_profile,
@@ -95,6 +96,20 @@ def test_solana_pools_from_profile():
     profile = {"solana_pools": [{"pool_id": "P1", "base_vault": "B1", "quote_vault": "Q1", "base_mint": "M1", "quote_mint": "M2"}]}
     result = _solana_pools_from_profile(profile)
     assert result == {"P1": {"base_vault": "B1", "quote_vault": "Q1", "base_mint": "M1", "quote_mint": "M2"}}
+
+
+def test_jit_pools_from_profile_absent_returns_none():
+    assert _jit_pools_from_profile({}) is None  # старое поведение: один пул из JIT_POOL_* настроек
+
+
+def test_jit_pools_from_profile_present():
+    profile = {"jit_pools": [
+        {"pool_address": "0xP1", "token0": "0xA", "token1": "0xB", "fee": 3000, "capital0_wei": 1, "capital1_wei": 2},
+        {"pool_address": "0xP2", "token0": "0xC", "token1": "0xD", "fee": 500, "capital0_wei": 3, "capital1_wei": 4},
+    ]}
+    result = _jit_pools_from_profile(profile)
+    assert result == profile["jit_pools"]
+    assert len(result) == 2
 
 
 if __name__ == "__main__":

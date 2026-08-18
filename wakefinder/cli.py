@@ -142,6 +142,17 @@ def _solana_pools_from_profile(profile: dict) -> dict[str, dict[str, str]]:
     return result
 
 
+def _jit_pools_from_profile(profile: dict) -> list[dict] | None:
+    """[[jit_pools]] с полями pool_address/token0/token1/fee/capital0_wei/
+    capital1_wei -> список для chains/eth/jit_liquidity.py:run(pools=...).
+    Секции нет в профиле -> None (старое поведение: один пул из JIT_POOL_*
+    настроек, см. docstring run())."""
+    entries = profile.get("jit_pools")
+    if not entries:
+        return None
+    return [dict(e) for e in entries]
+
+
 async def run_discover(args) -> None:
     """Обёртка над wakefinder/wallet_scanner.py в виде команды: сканирует
     указанные пулы/vault'ы, печатает ранжированных кандидатов и готовый
@@ -238,7 +249,7 @@ async def run_profile(path: str) -> None:
         await eth_liquidate_run()
     elif chain == "eth" and strategy == "jit":
         from wakefinder.chains.eth.jit_liquidity import run as eth_jit_run
-        await eth_jit_run()
+        await eth_jit_run(pools=_jit_pools_from_profile(profile))
     else:
         # chain/strategy сами по себе валидны (см. load_profile), но для ИХ
         # КОМБИНАЦИИ нет run() — например liquidate сейчас только ETH
