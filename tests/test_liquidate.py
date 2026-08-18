@@ -1,10 +1,13 @@
 import asyncio
 
-from wakefinder.chains.eth.liquidate import _estimate_profit
+from wakefinder.chains.eth.liquidate import _estimate_profit, _handle_pending_liquidation
+from wakefinder.common.config import get_settings
+from wakefinder.common.interfaces import PendingLiquidation
 
 WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
 USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 COLLATERAL = "0x1111111111111111111111111111111111111111"
+USER = "0x3333333333333333333333333333333333333333"
 
 
 class _Call:
@@ -79,8 +82,60 @@ def test_no_bonus_means_no_profit():
     assert estimate.profit_usd < 0
 
 
+def _pending(debt_asset=USDC):
+    return PendingLiquidation(tx_hash="0xVICTIM", collateral_asset=COLLATERAL, debt_asset=debt_asset, user=USER, debt_to_cover=1000 * 10**6)
+
+
+def test_skip_unconfigured_debt_asset_returns_none():
+    result = asyncio.run(_handle_pending_liquidation(
+        None, None, 1, None, None, None, None, None, debt_assets={WETH.lower()}, pending=_pending(debt_asset=USDC),
+    ))
+    assert result is None  # не наш debt-актив — пропуск, не попытка (не должен трогать consecutive_failures в run())
+
+
+class _Awaitable:
+    def __init__(self, value):
+        self._value = value
+
+    def __await__(self):
+        async def _get():
+            return self._value
+        return _get().__await__()
+
+
+class _FakeEth:
+    def __init__(self):
+        self.gas_price = _Awaitable(20 * 10**9)
+
+
+class _FakeW3:
+    def __init__(self):
+        self.eth = _FakeEth()
+
+
+def _settings():
+    s = get_settings()
+    s.eth_weth_address = WETH
+    s.liquidation_min_profit_usd = 1000.0  # заведомо выше любой прибыли из фикстур ниже
+    s.liquidation_gas_limit = 400_000
+    return s
+
+
+def test_skip_unprofitable_liquidation_returns_none():
+    oracle = _FakeContract(prices={USDC: 1 * 10**8, WETH: 3000 * 10**8})
+    data_provider = _FakeContract(configs={USDC: _config(6, 10500), COLLATERAL: _config(18, 10500)})
+
+    result = asyncio.run(_handle_pending_liquidation(
+        _FakeW3(), None, 1, _settings(), None, None, oracle, data_provider,
+        debt_assets={USDC.lower()}, pending=_pending(),
+    ))
+    assert result is None  # прибыль ниже LIQUIDATION_MIN_PROFIT_USD — пропуск, не попытка
+
+
 if __name__ == "__main__":
     test_profitable_liquidation_positive_profit()
     test_unprofitable_liquidation_negative_profit()
     test_no_bonus_means_no_profit()
+    test_skip_unconfigured_debt_asset_returns_none()
+    test_skip_unprofitable_liquidation_returns_none()
     print("ok")

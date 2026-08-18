@@ -104,9 +104,11 @@ async def _approve_debt_asset(w3: AsyncWeb3, account, pool_address: str, chain_i
 async def _handle_pending_liquidation(
     w3: AsyncWeb3, account, chain_id: int, settings, sender, pool, oracle, data_provider,
     debt_assets: set[str], pending: PendingLiquidation,
-) -> None:
+) -> bool | None:
+    """Возвращает None, если бандл не отправлялся (пропуск не считается неудачей
+    для счётчика consecutive_failures в run()), иначе True/False = included."""
     if pending.debt_asset.lower() not in debt_assets:
-        return  # не держим/не одобрили этот debt-актив — не с чем конкурировать
+        return None  # не держим/не одобрили этот debt-актив — не с чем конкурировать
 
     gas_price = await w3.eth.gas_price
     estimate = await _estimate_profit(
@@ -118,7 +120,7 @@ async def _handle_pending_liquidation(
             "пропуск ликвидации user=%s: ожидаемая прибыль $%.2f < порога $%.2f",
             pending.user, estimate.profit_usd, settings.liquidation_min_profit_usd,
         )
-        return
+        return None
 
     debt_token = w3.eth.contract(address=Web3.to_checksum_address(pending.debt_asset), abi=ERC20_ABI)
     balance = await debt_token.functions.balanceOf(account.address).call()
@@ -127,7 +129,7 @@ async def _handle_pending_liquidation(
             "пропуск ликвидации user=%s: недостаточно баланса debt-актива %s (%d < %d)",
             pending.user, pending.debt_asset, balance, pending.debt_to_cover,
         )
-        return
+        return None
 
     nonce = await w3.eth.get_transaction_count(account.address, "pending")
     latest = await w3.eth.get_block("latest")
@@ -163,6 +165,7 @@ async def _handle_pending_liquidation(
             settings.pnl_ledger_file, "eth", "liquidate", expected_profit_wei,
             token=pending.collateral_asset, wallet=pending.user,
         )
+    return included
 
 
 async def run() -> None:
@@ -176,6 +179,7 @@ async def run() -> None:
         logger.warning("LIQUIDATION_DEBT_ASSETS пуст — стратегия ничего не будет делать (не с чем конкурировать)")
 
     last_drawdown_check = 0.0
+    consecutive_failures = 0
 
     async with AsyncExitStack() as stack:
         w3 = await stack.enter_async_context(AsyncWeb3.persistent_websocket(WebsocketProviderV2(settings.eth_rpc_ws_url.get_secret_value())))
@@ -222,6 +226,22 @@ async def run() -> None:
                         killswitch.engage(settings.kill_switch_file, "drawdown breach: eth liquidate")
                         return
 
-                await _handle_pending_liquidation(w3, account, chain_id, settings, sender, pool, oracle, data_provider, debt_assets, pending)
+                included = await _handle_pending_liquidation(w3, account, chain_id, settings, sender, pool, oracle, data_provider, debt_assets, pending)
+                if included is None:
+                    continue  # пропуск (не наш debt-актив/недостаточно профита/баланса) — не попытка, счётчик не трогаем
+
+                consecutive_failures = 0 if included else consecutive_failures + 1
+                if consecutive_failures >= settings.max_consecutive_failures:
+                    logger.critical(
+                        "%d бандлов подряд не попали в блок — включаю kill switch, проверьте бота вручную",
+                        consecutive_failures,
+                    )
+                    send_telegram_alert(
+                        settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
+                        f"[wakefinder/eth liquidate] {consecutive_failures} бандлов подряд не попали в блок — авто-kill switch",
+                    )
+                    killswitch.engage(settings.kill_switch_file, "consecutive failures: eth liquidate")
+                    heartbeat_task.cancel()
+                    return
         finally:
             heartbeat_task.cancel()

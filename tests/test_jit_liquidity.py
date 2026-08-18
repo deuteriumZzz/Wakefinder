@@ -165,11 +165,12 @@ def test_bundle_not_included_logs_miss_and_returns(monkeypatch):
         sender = _FakeSender(included=False)
         pending = PendingLargeSwap(tx_hash="0xVICTIM", token_in=TOKEN0, token_out=TOKEN1, fee=3000, amount_in=100 * 10**18)
 
-        asyncio.run(jit._handle_pending_swap(
+        result = asyncio.run(jit._handle_pending_swap(
             w3, _FakeAccount(), 1, settings, sender, _FakePool(tick=0), _FakeNPM(), TOKEN0, TOKEN1, 3000, 60,
             "token0", 10**18, 10**18, pending,
         ))
 
+        assert result is False  # для consecutive_failures в run() — не включённый бандл считается неудачей
         assert sender.sent_bundle is not None
         assert w3.eth.withdraw_sent is False  # не включён -> withdraw не должен вызываться
 
@@ -192,11 +193,12 @@ def test_bundle_included_withdraws_and_records_weth_side_profit(monkeypatch):
         npm = _FakeNPM(token_id=7, collected0=10**18 + 50, collected1=0)
         pending = PendingLargeSwap(tx_hash="0xVICTIM", token_in=TOKEN0, token_out=TOKEN1, fee=3000, amount_in=100 * 10**18)
 
-        asyncio.run(jit._handle_pending_swap(
+        result = asyncio.run(jit._handle_pending_swap(
             w3, _FakeAccount(), 1, settings, sender, _FakePool(tick=0), npm, TOKEN0, TOKEN1, 3000, 60,
             "token0", 10**18, 10**18, pending,
         ))
 
+        assert result is True  # для consecutive_failures в run() — сбрасывает счётчик
         assert w3.eth.withdraw_sent is True
 
         from wakefinder.common.pnl_ledger import read_closed_trades

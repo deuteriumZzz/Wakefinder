@@ -127,7 +127,9 @@ async def _handle_pending_swap(
     w3: AsyncWeb3, account, chain_id: int, settings, sender, pool, npm,
     token0: str, token1: str, fee: int, tick_spacing: int, weth_side: str,
     capital0: int, capital1: int, pending: PendingLargeSwap,
-) -> None:
+) -> bool | None:
+    """Возвращает None, если бандл не отправлялся (пропуск не считается неудачей
+    для счётчика consecutive_failures в run()), иначе True/False = included."""
     slot0 = await pool.functions.slot0().call()
     current_tick = slot0[1]
 
@@ -135,7 +137,7 @@ async def _handle_pending_swap(
     amounts = liquidity_for_amounts(current_tick, tick_lower, tick_upper, capital0, capital1)
     if amounts.liquidity <= 0:
         logger.info("JIT: нулевая ликвидность из сконфигурированного капитала при текущей цене — пропуск")
-        return
+        return None
 
     try:
         victim_raw = await w3.eth.get_raw_transaction(pending.tx_hash)
@@ -144,7 +146,7 @@ async def _handle_pending_swap(
             "get_raw_transaction не удался для %s (%s) — RPC-провайдер, вероятно, не поддерживает eth_getRawTransactionByHash",
             pending.tx_hash, type(exc).__name__,
         )
-        return
+        return None
 
     nonce = await w3.eth.get_transaction_count(account.address, "pending")
     latest = await w3.eth.get_block("latest")
@@ -175,7 +177,7 @@ async def _handle_pending_swap(
     logger.info("JIT mint включён=%s tick_range=[%d,%d] капитал0=%d капитал1=%d", included, tick_lower, tick_upper, amounts.amount0, amounts.amount1)
     if not included:
         trade_log.log_attempt(settings.trade_log_file, "eth", "", 0, False, [_to_0x_hex(mint_raw)], strategy="jit_liquidity", latency_ms=latency_ms)
-        return
+        return False
 
     mint_receipt = await w3.eth.wait_for_transaction_receipt(Web3.keccak(mint_raw), timeout=60)
     increase_events = npm.events.IncreaseLiquidity().process_receipt(mint_receipt)
@@ -185,7 +187,7 @@ async def _handle_pending_swap(
             settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
             "[wakefinder/eth jit] mint включён, но tokenId не определён — позиция открыта, проверьте вручную",
         )
-        return
+        return True  # бандл всё же включился — это не неудача отправки, счётчик сбрасываем
     token_id = increase_events[0]["args"]["tokenId"]
 
     collected0, collected1 = await _withdraw_position(w3, account, npm, chain_id, token_id, amounts.liquidity)
@@ -202,6 +204,7 @@ async def _handle_pending_swap(
 
     trade_log.log_attempt(settings.trade_log_file, "eth", "", profit_wei, True, [_to_0x_hex(mint_raw)], strategy="jit_liquidity", latency_ms=latency_ms)
     pnl_ledger.record_closed_trade(settings.pnl_ledger_file, "eth", "jit_liquidity", profit_wei, token=pending.token_in)
+    return True
 
 
 async def run() -> None:
@@ -221,6 +224,7 @@ async def run() -> None:
         raise RuntimeError("JIT_POOL_TOKEN0/JIT_POOL_TOKEN1 — ни один не совпадает с ETH_WETH_ADDRESS; см. README 'JIT-ликвидность' про WETH-сторону, обязательную для расчёта PnL")
 
     last_drawdown_check = 0.0
+    consecutive_failures = 0
 
     async with AsyncExitStack() as stack:
         w3 = await stack.enter_async_context(AsyncWeb3.persistent_websocket(WebsocketProviderV2(settings.eth_rpc_ws_url.get_secret_value())))
@@ -266,9 +270,25 @@ async def run() -> None:
                         killswitch.engage(settings.kill_switch_file, "drawdown breach: eth jit_liquidity")
                         return
 
-                await _handle_pending_swap(
+                included = await _handle_pending_swap(
                     w3, account, chain_id, settings, sender, pool, npm, token0, token1, settings.jit_pool_fee, tick_spacing,
                     weth_side, int(settings.jit_capital0_wei), int(settings.jit_capital1_wei), pending,
                 )
+                if included is None:
+                    continue  # пропуск (нулевая ликвидность/RPC-ошибка получения raw tx) — не попытка, счётчик не трогаем
+
+                consecutive_failures = 0 if included else consecutive_failures + 1
+                if consecutive_failures >= settings.max_consecutive_failures:
+                    logger.critical(
+                        "%d бандлов подряд не попали в блок — включаю kill switch, проверьте бота вручную",
+                        consecutive_failures,
+                    )
+                    send_telegram_alert(
+                        settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id,
+                        f"[wakefinder/eth jit] {consecutive_failures} бандлов подряд не попали в блок — авто-kill switch",
+                    )
+                    killswitch.engage(settings.kill_switch_file, "consecutive failures: eth jit_liquidity")
+                    heartbeat_task.cancel()
+                    return
         finally:
             heartbeat_task.cancel()
