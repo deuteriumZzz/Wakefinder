@@ -338,49 +338,71 @@ async def _try_enter(
 
 
 async def _exit_position(w3, account, router_address, chain_id, token: str, reason: str, positions, positions_lock, positions_file, trade_log_file):
+    settings = get_settings()
+
     async with positions_lock:
         pos = positions.get(token.lower())
         if pos is None:
             return
         del positions[token.lower()]
-        _save_positions(positions_file, positions)
+        # ЧЕСТНО: файл на диске НЕ трогаем здесь — только после подтверждённого
+        # успешного выхода (см. ниже). Раньше _save_positions вызывался СРАЗУ,
+        # до попытки продажи — если попытка ревертила/бросала исключение
+        # (найдено реальным форк-тестом 2026-08-18: асинхронный баг в
+        # _approve_token уронил весь процесс посреди _exit_position), позиция
+        # тихо пропадала из отслеживания НАВСЕГДА, хотя токен на кошельке
+        # никуда не делся — бот больше никогда не пытался бы её продать и
+        # неверно считал бы себя менее экспонированным, чем на самом деле.
+        # Теперь: не вышли — возвращаем в память ниже, а диск и так остался
+        # нетронутым (позиция там всё ещё есть) — при падении процесса ДО
+        # подтверждения следующий запуск снова её увидит.
 
-    reserve_in, reserve_out = await _reserves(w3, pos.pool_address, pos.token)  # pos.token — то, что продаём
-    expected_out = get_amount_out(pos.amount_held, reserve_in, reserve_out)
-    amount_out_min = expected_out * (10_000 - SLIPPAGE_BPS) // 10_000
-
-    settings = get_settings()
     included = False
     tx_hash = ""
-    actual_out = expected_out
-    if settings.exit_via_cowswap:
-        # Выход — не вход: скорость решает НАША проверка цены по таймеру, а
-        # не гонка с чужой pending-транзакцией, поэтому торможение ради
-        # лучшей цены/MEV-защиты через CoW Protocol уместно (см. docstring
-        # common/cowswap.py). При любом сбое — откат на прямой AMM-своп ниже.
-        try:
-            await ensure_vault_relayer_approved(w3, account, chain_id, pos.token, pos.amount_held)
-            filled, cow_buy_amount = await place_and_wait_for_exit_order(
-                account, chain_id, pos.token, pos.token_in, pos.amount_held, amount_out_min,
-                settings.cowswap_order_valid_seconds, settings.cowswap_order_poll_timeout_seconds,
-            )
-        except Exception as exc:
-            logger.warning("CoWSwap выход не удался (%s) — откат на прямой AMM-своп", type(exc).__name__)
-            filled, cow_buy_amount = False, 0
-        if filled:
-            included, actual_out = True, cow_buy_amount
-            logger.info("копитрейд-выход (%s) через CoWSwap: токен=%s получено=%d", reason, token, cow_buy_amount)
-
-    if not included:
-        # approve роутеру на pos.token ОБЯЗАТЕЛЕН перед swapExactTokensForETH
-        # (transferFrom внутри свопа иначе ревертит) — см. docstring
-        # _approve_token. CoW-путь выше approve'ит VaultRelayer отдельно
-        # (ensure_vault_relayer_approved), это НЕ то же самое разрешение.
-        await _approve_token(w3, account, router_address, chain_id, pos.token, pos.amount_held)
-        included, tx_hash = await _send_single_swap(
-            w3, account, router_address, chain_id, [pos.token, pos.token_in], pos.amount_held, amount_out_min, is_entry=False,
-        )
+    actual_out = 0
+    try:
+        reserve_in, reserve_out = await _reserves(w3, pos.pool_address, pos.token)  # pos.token — то, что продаём
+        expected_out = get_amount_out(pos.amount_held, reserve_in, reserve_out)
+        amount_out_min = expected_out * (10_000 - SLIPPAGE_BPS) // 10_000
         actual_out = expected_out
+
+        if settings.exit_via_cowswap:
+            # Выход — не вход: скорость решает НАША проверка цены по таймеру, а
+            # не гонка с чужой pending-транзакцией, поэтому торможение ради
+            # лучшей цены/MEV-защиты через CoW Protocol уместно (см. docstring
+            # common/cowswap.py). При любом сбое — откат на прямой AMM-своп ниже.
+            try:
+                await ensure_vault_relayer_approved(w3, account, chain_id, pos.token, pos.amount_held)
+                filled, cow_buy_amount = await place_and_wait_for_exit_order(
+                    account, chain_id, pos.token, pos.token_in, pos.amount_held, amount_out_min,
+                    settings.cowswap_order_valid_seconds, settings.cowswap_order_poll_timeout_seconds,
+                )
+            except Exception as exc:
+                logger.warning("CoWSwap выход не удался (%s) — откат на прямой AMM-своп", type(exc).__name__)
+                filled, cow_buy_amount = False, 0
+            if filled:
+                included, actual_out = True, cow_buy_amount
+                logger.info("копитрейд-выход (%s) через CoWSwap: токен=%s получено=%d", reason, token, cow_buy_amount)
+
+        if not included:
+            # approve роутеру на pos.token ОБЯЗАТЕЛЕН перед swapExactTokensForETH
+            # (transferFrom внутри свопа иначе ревертит) — см. docstring
+            # _approve_token. CoW-путь выше approve'ит VaultRelayer отдельно
+            # (ensure_vault_relayer_approved), это НЕ то же самое разрешение.
+            await _approve_token(w3, account, router_address, chain_id, pos.token, pos.amount_held)
+            included, tx_hash = await _send_single_swap(
+                w3, account, router_address, chain_id, [pos.token, pos.token_in], pos.amount_held, amount_out_min, is_entry=False,
+            )
+            actual_out = expected_out
+    except Exception as exc:
+        logger.error("выход из позиции (%s) для %s упал с исключением (%s) — позиция возвращена в отслеживание", reason, token, type(exc).__name__)
+        included = False
+
+    async with positions_lock:
+        if included:
+            _save_positions(positions_file, positions)  # удаление подтверждено — теперь сохраняем на диск
+        else:
+            positions[token.lower()] = pos  # не вышли — возвращаем в память, диск не трогаем (позиция там и так осталась)
 
     logger.info("копитрейд-выход (%s): токен=%s included=%s", reason, token, included)
     trade_log.log_attempt(trade_log_file, "eth", pos.pool_address, actual_out, included, [tx_hash] if tx_hash else [], strategy="copytrade_exit", wallet=pos.watched_wallet)
