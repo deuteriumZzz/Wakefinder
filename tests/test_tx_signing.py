@@ -8,9 +8,16 @@
 `Web3()`-энкодер (везде использовались Fake-объекты `w3`, которые не строят
 транзакции по-настоящему) — баг был бы невидим для всего проекта, пока
 кто-то не попытался бы реально отправить сделку. Эти тесты дёргают
-_sign_leg/_sign_swap напрямую (синхронные, без RPC) и напрямую строят
-swapExactTokensForETH тем же способом, что и chains/eth/snipe.py._sell —
-третий паттерн вызова, которого нет в snipe_filter.py."""
+_sign_leg/_sign_entry_swap/_sign_exit_swap напрямую (синхронные, без RPC).
+
+_sign_entry_swap/_sign_exit_swap (chains/eth/copytrade.py) появились
+2026-08-18 взамен единой _sign_swap — реальный форк-тест (не юнит-тест)
+поймал, что _sign_swap строила swapExactTokensForTokens ВЕЗДЕ, включая
+вход, где бот держит капитал в НАТИВНОМ ETH, а не в WETH — транзакция
+строилась валидно (эти тесты и раньше проходили на "не падает при
+построении"), но ГАРАНТИРОВАННО ревертила on-chain (transferFrom на актив,
+которого нет и не approve'ан). Этот класс бага структурно невидим для
+synthetic/unit-тестов — нужно было реальное исполнение на форке mainnet."""
 
 import os
 
@@ -25,7 +32,7 @@ from eth_account import Account  # noqa: E402
 from web3 import Web3  # noqa: E402
 
 from wakefinder.chains.eth.abi import ROUTER_ABI  # noqa: E402
-from wakefinder.chains.eth.copytrade import _sign_swap  # noqa: E402
+from wakefinder.chains.eth.copytrade import _sign_entry_swap, _sign_exit_swap  # noqa: E402
 from wakefinder.chains.eth.main import _sign_leg  # noqa: E402
 from wakefinder.chains.eth.snipe import _buy_backrun  # noqa: E402
 
@@ -41,26 +48,43 @@ def test_sign_leg_builds_real_transaction_without_raising():
     assert len(raw) > 0
 
 
-def test_sign_swap_builds_real_transaction_without_raising():
-    raw = _sign_swap(ROUTER, ACCOUNT, 1, 0, 10**10, 10**9, [WETH, TOKEN], 10**18, 1)
-    assert isinstance(raw, bytes)
-    assert len(raw) > 0
+def _decode(raw: bytes):
+    """Декодирует подписанную сырую транзакцию обратно: (имя функции,
+    параметры, dict транзакции) — реальный round-trip через Web3-энкодер,
+    не проверка "не упало при построении"."""
+    from eth_account._utils.typed_transactions import TypedTransaction
+
+    router = Web3().eth.contract(address=ROUTER, abi=ROUTER_ABI)
+    typed = TypedTransaction.from_bytes(raw)
+    tx = typed.as_dict()
+    fn, params = router.decode_function_input(tx["data"])
+    return fn.fn_name, params, tx
 
 
-def test_swap_exact_tokens_for_eth_builds_without_raising():
-    """Тот же паттерн, что chains/eth/snipe.py:_sell — единственная функция
-    с этой конкретной перегрузкой, не покрытая _sign_leg/_sign_swap выше."""
-    encoder = Web3()
-    router = encoder.eth.contract(address=ROUTER, abi=ROUTER_ABI)
-    tx = router.functions.swapExactTokensForETH(
-        amountIn=10**18, amountOutMin=1, path=[TOKEN, WETH], to=ACCOUNT.address, deadline=9999999999,
-    ).build_transaction({
-        "from": ACCOUNT.address, "nonce": 0, "gas": 250_000,
-        "maxFeePerGas": 10**10, "maxPriorityFeePerGas": 10**9, "chainId": 1,
-    })
-    raw = ACCOUNT.sign_transaction(tx).rawTransaction
-    assert isinstance(raw, bytes)
-    assert len(raw) > 0
+def test_sign_entry_swap_builds_real_swapExactETHForTokens():
+    """Регрессия для баг-фикса 2026-08-18: вход обязан идти через
+    swapExactETHForTokens (value=amount_in), НЕ swapExactTokensForTokens —
+    иначе гарантированный on-chain revert (бот не держит/не approve'ил
+    WETH, см. docstring модуля)."""
+    amount_in = 10**18
+    raw = _sign_entry_swap(ROUTER, ACCOUNT, 1, 0, 10**10, 10**9, [WETH, TOKEN], amount_in, 1)
+    assert isinstance(raw, bytes) and len(raw) > 0
+    fn_name, params, tx = _decode(raw)
+    assert fn_name == "swapExactETHForTokens"
+    assert params["path"] == [WETH, TOKEN]
+    assert tx["value"] == amount_in  # сумма идёт как tx.value, не как ERC20-параметр
+
+
+def test_sign_exit_swap_builds_real_swapExactTokensForETH():
+    """Регрессия для того же баг-фикса: выход обязан идти через
+    swapExactTokensForETH — получаем ETH напрямую, симметрично входу.
+    Вызывающий код (_exit_position) обязан approve() ЗАРАНЕЕ (не проверяется
+    этим тестом — это ответственность _approve_token, не _sign_exit_swap)."""
+    raw = _sign_exit_swap(ROUTER, ACCOUNT, 1, 0, 10**10, 10**9, [TOKEN, WETH], 10**18, 1)
+    assert isinstance(raw, bytes) and len(raw) > 0
+    fn_name, params, _ = _decode(raw)
+    assert fn_name == "swapExactTokensForETH"
+    assert params["path"] == [TOKEN, WETH]
 
 
 class _Awaitable:
@@ -127,7 +151,7 @@ def test_buy_backrun_signs_real_transaction_and_orders_bundle_victim_first():
 
 if __name__ == "__main__":
     test_sign_leg_builds_real_transaction_without_raising()
-    test_sign_swap_builds_real_transaction_without_raising()
-    test_swap_exact_tokens_for_eth_builds_without_raising()
+    test_sign_entry_swap_builds_real_swapExactETHForTokens()
+    test_sign_exit_swap_builds_real_swapExactTokensForETH()
     test_buy_backrun_signs_real_transaction_and_orders_bundle_victim_first()
     print("ok")

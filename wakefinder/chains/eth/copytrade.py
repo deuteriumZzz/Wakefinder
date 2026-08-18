@@ -102,9 +102,42 @@ def _save_positions(path: str, positions: dict[str, Position]) -> None:
         json.dump({k: asdict(v) for k, v in positions.items()}, f, indent=2)
 
 
-def _sign_swap(router_address, account, chain_id, nonce, max_fee, priority_fee, path, amount_in, amount_out_min) -> bytes:
+def _sign_entry_swap(router_address, account, chain_id, nonce, max_fee, priority_fee, path, amount_in, amount_out_min) -> bytes:
+    """ETH -> token_out. path[0] обязан быть WETH (см. ponytail-заметку в
+    _try_enter про token_in==WETH — _try_enter теперь явно это проверяет
+    перед вызовом). swapExactETHForTokens, НЕ swapExactTokensForTokens: бот
+    держит капитал в НАТИВНОМ ETH (w3.eth.get_balance в _try_enter), не в
+    WETH, сумма идёт как tx.value, роутер сам wrap'ает — approve/владение
+    WETH не нужны. Раньше здесь была swapExactTokensForTokens, которая
+    ГАРАНТИРОВАННО ревертила (transferFrom на WETH, которого бот никогда не
+    держит и не approve'ил) — найдено реальным форк-тестом 2026-08-18, не
+    синтетическим (юнит-тест на "не падает при построении" эту ошибку не
+    ловит — транзакция строится валидно, ревертит только on-chain)."""
     router = _ENCODER.eth.contract(address=router_address, abi=ROUTER_ABI)
-    tx = router.functions.swapExactTokensForTokens(
+    tx = router.functions.swapExactETHForTokens(
+        amountOutMin=amount_out_min, path=path, to=account.address, deadline=int(time.time()) + 60,
+    ).build_transaction(
+        {
+            "from": account.address,
+            "value": amount_in,
+            "nonce": nonce,
+            "gas": GAS_LIMIT,
+            "maxFeePerGas": max_fee,
+            "maxPriorityFeePerGas": priority_fee,
+            "chainId": chain_id,
+        }
+    )
+    return account.sign_transaction(tx).rawTransaction
+
+
+def _sign_exit_swap(router_address, account, chain_id, nonce, max_fee, priority_fee, path, amount_in, amount_out_min) -> bytes:
+    """token -> ETH. path[-1] обязан быть WETH. swapExactTokensForETH, НЕ
+    swapExactTokensForTokens — получаем ETH напрямую (симметрично
+    _sign_entry_swap). Требует ПРЕДВАРИТЕЛЬНОГО approve(path[0]) роутеру —
+    см. _approve_token(), вызывается в _exit_position ДО этой функции;
+    без него — тот же класс гарантированного revert, что был у входа."""
+    router = _ENCODER.eth.contract(address=router_address, abi=ROUTER_ABI)
+    tx = router.functions.swapExactTokensForETH(
         amountIn=amount_in, amountOutMin=amount_out_min, path=path, to=account.address, deadline=int(time.time()) + 60,
     ).build_transaction(
         {
@@ -117,6 +150,44 @@ def _sign_swap(router_address, account, chain_id, nonce, max_fee, priority_fee, 
         }
     )
     return account.sign_transaction(tx).rawTransaction
+
+
+async def _approve_token(w3: AsyncWeb3, account, router_address: str, chain_id: int, token: str, amount: int) -> bool:
+    """approve роутеру на трату token ПЕРЕД swapExactTokensForETH в
+    _exit_position — без этого transferFrom внутри свопа ревертит.
+    Проверяет текущий allowance сначала (тот же приём, что
+    cowswap.py:ensure_vault_relayer_approved) — не тратим лишний газ на
+    повторный approve, если предыдущего хватает."""
+    erc20_async = w3.eth.contract(address=token, abi=ERC20_ABI)
+    current_allowance = await erc20_async.functions.allowance(account.address, router_address).call()
+    if current_allowance >= amount:
+        return True
+    nonce = await w3.eth.get_transaction_count(account.address, "pending")
+    latest = await w3.eth.get_block("latest")
+    priority_fee = Web3.to_wei(2, "gwei")
+    max_fee = latest["baseFeePerGas"] * 2 + priority_fee
+    # _ENCODER (Web3() синхронный) для build_transaction — то же разделение
+    # sync/async контрактов, что snipe.py:_approve: построение calldata не
+    # ходит в сеть, значит не должно требовать await; w3 (AsyncWeb3) — только
+    # для реальных RPC-вызовов выше/ниже. Раньше здесь был erc20 от w3
+    # (асинхронный), .build_transaction() на нём возвращает корутину, а не
+    # dict — TypeError при sign_transaction, найдено реальным форк-тестом
+    # 2026-08-18 (ruff/mypy это не ловят).
+    erc20 = _ENCODER.eth.contract(address=token, abi=ERC20_ABI)
+    tx = erc20.functions.approve(router_address, 2**256 - 1).build_transaction(
+        {
+            "from": account.address, "nonce": nonce, "gas": 60_000,
+            "maxFeePerGas": max_fee, "maxPriorityFeePerGas": priority_fee, "chainId": chain_id,
+        }
+    )
+    raw = account.sign_transaction(tx).rawTransaction
+    settings = get_settings()
+    if settings.dry_run:
+        logger.info("[DRY RUN] approve подписан, реальная отправка пропущена")
+        return True
+    tx_hash = await w3.eth.send_raw_transaction(raw)
+    receipt = await w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    return receipt.get("status") == 1
 
 
 async def _reserves(w3: AsyncWeb3, pool_address: str, token_in: str) -> tuple[int, int]:
@@ -159,16 +230,20 @@ async def _wait_for_receipt(w3: AsyncWeb3, tx_hash, timeout_seconds: float = REC
 
 async def _send_single_swap(
     w3: AsyncWeb3, account, router_address: str, chain_id: int,
-    path: list[str], amount_in: int, amount_out_min: int,
+    path: list[str], amount_in: int, amount_out_min: int, is_entry: bool,
 ) -> tuple[bool, str]:
     """Отправляет в публичный мемпул напрямую (не через Flashbots — см. docstring
     модуля про компромисс скорости против защиты от сэндвича). Возвращает
-    (успех, tx_hash)."""
+    (успех, tx_hash). is_entry=True -> swapExactETHForTokens (path[0]==WETH,
+    капитал в ETH); is_entry=False -> swapExactTokensForETH (path[-1]==WETH,
+    продаём держимый токен — вызывающий код обязан approve() ЗАРАНЕЕ,
+    см. _approve_token в _exit_position)."""
     nonce = await w3.eth.get_transaction_count(account.address, "pending")
     latest = await w3.eth.get_block("latest")
     priority_fee = Web3.to_wei(2, "gwei")
     max_fee = latest["baseFeePerGas"] * 2 + priority_fee
-    raw = _sign_swap(router_address, account, chain_id, nonce, max_fee, priority_fee, path, amount_in, amount_out_min)
+    sign_fn = _sign_entry_swap if is_entry else _sign_exit_swap
+    raw = sign_fn(router_address, account, chain_id, nonce, max_fee, priority_fee, path, amount_in, amount_out_min)
     settings = get_settings()
     if settings.dry_run:
         logger.info("[DRY RUN] транзакция подписана, реальная отправка в мемпул пропущена")
@@ -186,6 +261,17 @@ async def _try_enter(
     size_pct, max_total_exposure_pct, positions, positions_lock, positions_file, trade_log_file,
     detected_at: float,
 ):
+    settings = get_settings()
+    if token_in.lower() != settings.eth_weth_address.lower():
+        # Копитрейд по конструкции работает только для WETH-номинированных
+        # сделок кита (см. docstring _sign_entry_swap) — капитал бота в
+        # нативном ETH, свопаем через swapExactETHForTokens, которая
+        # требует path[0]==WETH. Кит, торгующий из другого базового актива
+        # (напр. USDC), не может быть честно зеркалирован без отдельного
+        # пути конвертации — пропускаем, не пытаемся отправить ETH под
+        # чужой актив.
+        logger.info("пропуск входа: token_in=%s у кита не WETH — копитрейд поддерживает только WETH-номинированные сделки", token_in)
+        return
     balance = await w3.eth.get_balance(account.address)
 
     async with positions_lock:
@@ -193,7 +279,6 @@ async def _try_enter(
             return  # уже держим этот токен, не наращиваем позицию повторно
         current_exposure = sum(p.entry_amount_in for p in positions.values())
 
-    settings = get_settings()
     wallet_stats = compute_wallet_stats(trade_log_file).get(watched_wallet.lower())
     multiplier = (
         win_rate_size_multiplier(
@@ -205,7 +290,7 @@ async def _try_enter(
     if wallet_stats and multiplier != 1.0:  # wallet_stats всегда truthy здесь (иначе multiplier == 1.0) — доп. проверка только для mypy
         logger.info("win-rate множитель размера для %s: %.2fx (win_rate=%.0f%%, сделок=%d)", watched_wallet, multiplier, wallet_stats.win_rate * 100, wallet_stats.exits)
 
-    # ponytail: тот же приём, что и в арбитраже — предполагаем token_in 18-decimal (WETH)
+    # token_in==WETH уже гарантирован проверкой выше (не просто допущение)
     amount_in = int(balance * size_pct * multiplier / 100)
     exposure_cap = int(balance * max_total_exposure_pct / 100)
     if current_exposure + amount_in > exposure_cap:
@@ -234,7 +319,7 @@ async def _try_enter(
     amount_out_min = expected_out * (10_000 - SLIPPAGE_BPS) // 10_000
 
     latency_ms = (time.time() - detected_at) * 1000
-    included, tx_hash = await _send_single_swap(w3, account, router_address, chain_id, [token_in, token_out], amount_in, amount_out_min)
+    included, tx_hash = await _send_single_swap(w3, account, router_address, chain_id, [token_in, token_out], amount_in, amount_out_min, is_entry=True)
     logger.info("копитрейд-вход (консенсус): токен=%s триггер-кошелёк=%s amount_in=%d included=%s", token_out, watched_wallet, amount_in, included)
     trade_log.log_attempt(trade_log_file, "eth", pool_address, amount_in, included, [tx_hash], strategy="copytrade_entry", wallet=watched_wallet, latency_ms=latency_ms)
     if not included:
@@ -287,8 +372,13 @@ async def _exit_position(w3, account, router_address, chain_id, token: str, reas
             logger.info("копитрейд-выход (%s) через CoWSwap: токен=%s получено=%d", reason, token, cow_buy_amount)
 
     if not included:
+        # approve роутеру на pos.token ОБЯЗАТЕЛЕН перед swapExactTokensForETH
+        # (transferFrom внутри свопа иначе ревертит) — см. docstring
+        # _approve_token. CoW-путь выше approve'ит VaultRelayer отдельно
+        # (ensure_vault_relayer_approved), это НЕ то же самое разрешение.
+        await _approve_token(w3, account, router_address, chain_id, pos.token, pos.amount_held)
         included, tx_hash = await _send_single_swap(
-            w3, account, router_address, chain_id, [pos.token, pos.token_in], pos.amount_held, amount_out_min
+            w3, account, router_address, chain_id, [pos.token, pos.token_in], pos.amount_held, amount_out_min, is_entry=False,
         )
         actual_out = expected_out
 
