@@ -139,6 +139,20 @@ POOL_ABI = [
     {"name": "tickSpacing", "type": "function", "inputs": [], "outputs": [{"name": "", "type": "int24"}], "stateMutability": "view"},
     {"name": "token0", "type": "function", "inputs": [], "outputs": [{"name": "", "type": "address"}], "stateMutability": "view"},
     {"name": "token1", "type": "function", "inputs": [], "outputs": [{"name": "", "type": "address"}], "stateMutability": "view"},
+    {
+        "name": "Swap",
+        "type": "event",
+        "anonymous": False,
+        "inputs": [
+            {"name": "sender", "type": "address", "indexed": True},
+            {"name": "recipient", "type": "address", "indexed": True},
+            {"name": "amount0", "type": "int256", "indexed": False},
+            {"name": "amount1", "type": "int256", "indexed": False},
+            {"name": "sqrtPriceX96", "type": "uint160", "indexed": False},
+            {"name": "liquidity", "type": "uint128", "indexed": False},
+            {"name": "tick", "type": "int24", "indexed": False},
+        ],
+    },
 ]
 
 # SwapRouter02 — deadline отсутствует в ExactInputSingleParams (в отличие от
