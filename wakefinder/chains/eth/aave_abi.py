@@ -5,13 +5,17 @@ liquidation_watcher.py и liquidation_scanner.py, не полный интерф
 сканирования должников (liquidation_scanner.py), в отличие от liquidationCall,
 на которую реагирует только реактивный watcher.
 
-ЧЕСТНО: адреса контрактов (config.py: aave_pool_address и т.д.) и сигнатуры
-функций взяты из документированного, стабильного публичного интерфейса
-Aave V3 (github.com/aave/aave-v3-core) — актуальность конкретных АДРЕСОВ
-для mainnet НЕ проверена вживую в этой песочнице (нет сетевого доступа к
-Ethereum RPC, та же честная оговорка, что и у builder RPC URL в README).
-ПРОВЕРЬТЕ САМИ перед использованием — официальный реестр:
-https://github.com/bgd-labs/aave-address-book"""
+Сигнатуры функций — из документированного, стабильного публичного
+интерфейса Aave V3 (github.com/aave/aave-v3-core). Адреса контрактов
+(config.py: aave_pool_address/aave_pool_data_provider_address/
+aave_price_oracle_address) ПРОВЕРЕНЫ ВЖИВУЮ 2026-08-18 через реальный
+eth_call на mainnet (chainId=1) — не просто скопированы из документации:
+aave_pool_address.ADDRESSES_PROVIDER() -> PoolAddressesProvider
+.getPoolDataProvider()/.getPriceOracle() дали ИМЕННО текущие дефолты,
+getReserveConfigurationData()/getAssetPrice() на них вернули реалистичные
+значения (реальная цена WETH на момент проверки, реальные параметры
+резерва). Если меняете дефолты на другие — сверяйте с официальным
+реестром: https://github.com/bgd-labs/aave-address-book"""
 
 AAVE_POOL_ABI = [
     {

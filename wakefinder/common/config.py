@@ -24,14 +24,14 @@ KNOWN_ROUTERS = {
 
 # Тот же принцип, что KNOWN_ROUTERS — liquidationCall двигает деньги
 # (pull debtAsset, push collateral), опечатка/скомпрометированный .env не
-# должны молча указывать на неизвестный контракт. Адрес НЕ проверен вживую
-# в этой песочнице — см. docstring chains/eth/aave_abi.py.
+# должны молча указывать на неизвестный контракт. Адрес проверен вживую
+# 2026-08-18 — см. docstring chains/eth/aave_abi.py.
 KNOWN_AAVE_POOLS = {
     "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2".lower(),  # Aave V3 Pool (mainnet)
 }
 
 # Тот же принцип — NonfungiblePositionManager.mint()/decreaseLiquidity()
-# двигают деньги. Адрес НЕ проверен вживую в этой песочнице — см. docstring
+# двигают деньги. Адрес проверен вживую 2026-08-18 — см. docstring
 # chains/eth/univ3_abi.py.
 KNOWN_NPM_ADDRESSES = {
     "0xC36442b4a4522E871399CD717aBDD847Ab11FE88".lower(),  # Uniswap V3 NonfungiblePositionManager (mainnet)
@@ -337,9 +337,17 @@ class Settings(BaseSettings):
     # взаимоисключающе. Использует КАПИТАЛ КОШЕЛЬКА (не flash loan) — нужно
     # заранее держать и одобрить (approve) debt-активы, которыми готовы
     # погашать чужой долг, см. README "Ликвидации на Aave V3".
+    # Все три адреса ПРОВЕРЕНЫ ВЖИВУЮ 2026-08-18 через реальный eth_call на
+    # mainnet (chainId=1): aave_pool_address.ADDRESSES_PROVIDER() ->
+    # PoolAddressesProvider.getPoolDataProvider()/getPriceOracle() дали
+    # ИМЕННО эти два адреса — не из стороннего списка, а напрямую из
+    # собственного реестра протокола Aave. Заодно подтвердилась природа
+    # прежнего бага: старые дефолты были ровно этими же строками с
+    # ОБРЕЗАННЫМ последним hex-символом (39 вместо 40) — опечатка при
+    # наборе вручную, не "другой, неправильный" адрес.
     aave_pool_address: str = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
-    aave_pool_data_provider_address: str = "0x7B4EB56E7CD4b454BA8ff71E4518426369a138a"
-    aave_price_oracle_address: str = "0x54586bE62E3c3580375aE3723C145253060Ca0C"
+    aave_pool_data_provider_address: str = "0x0a16f2FCC0D44FaE41cc54e079281D84A363bECD"
+    aave_price_oracle_address: str = "0x54586bE62E3c3580375aE3723C145253060Ca0C2"
     # Через запятую — debt-активы, которые бот заранее держит и готов
     # одобрить Pool'у на трату (approve при старте). Пусто = стратегия
     # фактически неактивна (не с чем конкурировать за ЛЮБУЮ найденную
@@ -415,13 +423,16 @@ class Settings(BaseSettings):
     def _warn_malformed_aave_addresses(self) -> "Settings":
         """НЕ raise (в отличие от allowlist-валидаторов выше) — это была бы
         поломка Settings() для ВСЕХ стратегий (общий lru_cache-singleton, см.
-        cli.py), включая те, что вообще не используют Aave. Найдено при
-        расширении охвата ликвидаций 2026-08-18: aave_pool_data_provider_address/
-        aave_price_oracle_address по умолчанию — 39 hex-символов вместо 40
-        (синтаксически невалидный адрес, не вопрос верификации "правильный ли
-        контракт" — Web3.to_checksum_address() упадёт на этом ДО любого сетевого
-        вызова). ПРОВЕРЬТЕ И ИСПРАВЬТЕ перед использованием liquidate/jit —
-        см. https://github.com/bgd-labs/aave-address-book."""
+        cli.py), включая те, что вообще не используют Aave. Найден и
+        ИСПРАВЛЕН 2026-08-18: aave_pool_data_provider_address/
+        aave_price_oracle_address по умолчанию были 39 hex-символов вместо 40
+        (опечатка при ручном наборе — ровно те же строки без последнего
+        символа), дефолты уже заменены на проверенные вживую значения (см.
+        комментарий над полями выше). Валидатор остаётся как защита от
+        ТАКОЙ ЖЕ опечатки в СВОЁМ .env пользователя — синтаксически
+        невалидный адрес роняет Web3.to_checksum_address() ДО любого
+        сетевого вызова, лучше поймать это явным warning, чем непонятным
+        traceback в середине run()."""
         for field_name in ("aave_pool_address", "aave_pool_data_provider_address", "aave_price_oracle_address"):
             value = getattr(self, field_name)
             if not is_address(value):

@@ -14,11 +14,12 @@ API-ключа и явная поддержка sell-ордеров (прода�
 нет официального Python SDK, интеграция потребовала бы больше кода ради
 того же результата.
 
-ЧЕСТНО: EIP-712 домен (GPv2Settlement) и VaultRelayer-адрес — из
-документированной публичной спецификации CoW Protocol
-(docs.cow.fi/cow-protocol/reference/contracts/core), НЕ проверены вживую —
-нет сетевого доступа к Ethereum/CoW API в этой песочнице. ПРОВЕРЬТЕ САМИ
-перед использованием.
+EIP-712 домен (GPv2Settlement) и VaultRelayer-адрес ПРОВЕРЕНЫ ВЖИВУЮ
+2026-08-18: реальный eth_call GPv2Settlement.vaultRelayer() на mainnet
+вернул РОВНО VAULT_RELAYER_ADDRESS — взаимное подтверждение обоих адресов
+одним вызовом. CoW API (api.cow.fi) тоже отвечает вживую (проверен
+/version и /token/.../native_price). Если меняете адреса — сверяйте с
+docs.cow.fi/cow-protocol/reference/contracts/core.
 
 При ЛЮБОМ сбое (нет котировки/API недоступен/не исполнилось за таймаут/
 cancelled/expired) — вызывающий код (copytrade.py/snipe.py) откатывается на

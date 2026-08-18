@@ -917,16 +917,16 @@ Tier B сохранённого MEV-роадмапа. Атомарная, как
   же дисциплина, что у `common/amm.py` для арбитража, не приближение.
   `LIQUIDATION_MIN_PROFIT_USD` — порог чистой прибыли (после оценки газа
   через тот же оракул, конвертация ETH→USD), чтобы участвовать в гонке.
-- **Адреса Aave V3 mainnet НЕ проверены вживую, и ДВА из трёх — ИЗВЕСТНО
-  НЕВАЛИДНЫ**: `AAVE_POOL_DATA_PROVIDER_ADDRESS`/`AAVE_PRICE_ORACLE_ADDRESS`
-  по умолчанию — 39 hex-символов вместо 40 (найдено 2026-08-18 при
-  расширении охвата ликвидаций — синтаксически невалидный адрес, не вопрос
-  "тот ли это контракт"). `Settings()` не падает на этом (не блокирует
-  остальные 7 стратегий/процессов, использующие общий singleton), только
-  предупреждает в лог (`_warn_malformed_aave_addresses` в `config.py`) —
-  но `liquidate`/`jit` упадут при первом обращении к контракту. ОБЯЗАТЕЛЬНО
-  замените на реальные проверенные адреса перед использованием —
-  официальный реестр: https://github.com/bgd-labs/aave-address-book.
+- **Адреса Aave V3 mainnet ПРОВЕРЕНЫ ВЖИВУЮ 2026-08-18.** Ранее
+  `AAVE_POOL_DATA_PROVIDER_ADDRESS`/`AAVE_PRICE_ORACLE_ADDRESS` по
+  умолчанию были 39 hex-символов вместо 40 (опечатка — обрезанный
+  последний символ, не "другой неправильный" адрес) — исправлено реальным
+  `eth_call` на mainnet: `aave_pool_address.ADDRESSES_PROVIDER()` ->
+  `PoolAddressesProvider.getPoolDataProvider()`/`.getPriceOracle()` дали
+  правильные значения напрямую из собственного реестра протокола, плюс
+  `getReserveConfigurationData()`/`getAssetPrice()` на них вернули
+  реалистичные данные (текущая цена WETH и параметры резерва). Если
+  меняете дефолты на другие — сверяйте сами: https://github.com/bgd-labs/aave-address-book.
 - **Пример профиля**: `configs/eth-liquidate.toml`. Требует ОТДЕЛЬНОГО
   процесса/кошелька от остальных 4 стратегий при общем `ETH_PRIVATE_KEY`
   (то же ограничение по nonce, что и везде в проекте).
@@ -955,11 +955,12 @@ Tier D сохранённого MEV-роадмапа — СУЖЕННЫЙ до �
   конкретный токен (проверка текущего allowance, approve только если не
   хватает) — в отличие от Aave-ликвидаций, где debt-активы известны заранее,
   здесь выход может быть по ЛЮБОМУ токену, который держит copytrade/snipe.
-- **ЧЕСТНО НЕ ПРОВЕРЕНО ВЖИВУЮ**: EIP-712 домен (`GPv2Settlement`) и
-  `VaultRelayer`-адрес — из документированной публичной спецификации CoW
-  Protocol (docs.cow.fi/cow-protocol/reference/contracts/core), нет
-  сетевого доступа к CoW API в песочнице разработки для проверки.
-  ПРОВЕРЬТЕ САМИ перед использованием.
+- **ПРОВЕРЕНО ВЖИВУЮ 2026-08-18**: EIP-712 домен (`GPv2Settlement`) и
+  `VaultRelayer`-адрес — реальный `eth_call`
+  `GPv2Settlement.vaultRelayer()` на mainnet вернул РОВНО
+  `VAULT_RELAYER_ADDRESS`, взаимно подтвердив оба адреса одним вызовом.
+  CoW API (`api.cow.fi`) тоже отвечает вживую (`/version`,
+  `/token/.../native_price`).
 
 ## JIT-ликвидность на Uniswap V3 (`wakefinder/chains/eth/jit_liquidity.py`)
 
@@ -1007,11 +1008,10 @@ liquidity ПРЯМО ПЕРЕД большим pending-свопом, чтобы 
   (nonce→sign→send) всегда последовательна — иначе гонка nonce между
   пулами на одном кошельке. Тот же принцип "не сканирует рынок сам", что у
   Aave-ликвидаций (`LIQUIDATION_DEBT_ASSETS`) и арбитража (`pool_registry`).
-- **ЧЕСТНО НЕ ПРОВЕРЕНО ВЖИВУЮ**: адреса `NonfungiblePositionManager`/
-  `SwapRouter02` mainnet (`KNOWN_NPM_ADDRESSES` в `config.py`) — из
-  документированной публичной спецификации Uniswap V3
-  (github.com/Uniswap/v3-periphery), нет сетевого доступа в песочнице для
-  проверки. ПРОВЕРЬТЕ САМИ перед использованием.
+- **ПРОВЕРЕНО ВЖИВУЮ 2026-08-18**: адреса `NonfungiblePositionManager`/
+  `SwapRouter02` mainnet (`KNOWN_NPM_ADDRESSES` в `config.py`) — реальный
+  `eth_call` `.factory()` на обоих дефолтах вернул ОДИН И ТОТ ЖЕ реальный
+  адрес фабрики Uniswap V3, взаимно подтвердив оба адреса.
 - **Пример профиля**: `configs/eth-jit.toml`. Требует ОТДЕЛЬНОГО
   процесса/кошелька от остальных 4 стратегий при общем `ETH_PRIVATE_KEY`.
 

@@ -37,16 +37,27 @@ def test_unknown_router_is_rejected():
         _settings(eth_router_address="0x0000000000000000000000000000000000000000")
 
 
-def test_malformed_aave_address_warns_but_does_not_raise(caplog):
-    # aave_pool_data_provider_address/aave_price_oracle_address по умолчанию —
-    # 39 hex-символов вместо 40 (найдено при расширении охвата ликвидаций,
-    # см. docstring _warn_malformed_aave_addresses в config.py). НЕ должно
-    # ронять Settings() — это общий singleton для ВСЕХ стратегий.
+def test_default_aave_addresses_are_well_formed_and_do_not_warn(caplog):
+    # Раньше aave_pool_data_provider_address/aave_price_oracle_address по
+    # умолчанию были 39 hex-символов вместо 40 — исправлено 2026-08-18,
+    # проверено вживую через eth_call на mainnet (см. docstring полей в
+    # config.py). Дефолты больше не должны триггерить предупреждение.
     import logging
     with caplog.at_level(logging.WARNING, logger="wakefinder.config"):
-        s = _settings()
-    assert s.aave_pool_data_provider_address  # сконструировалось, не упало
-    assert "aave_pool_data_provider_address" in caplog.text
+        _settings()
+    assert "aave_pool_data_provider_address" not in caplog.text
+    assert "aave_price_oracle_address" not in caplog.text
+
+
+def test_malformed_aave_address_override_warns_but_does_not_raise(caplog):
+    # Валидатор не должен ронять Settings() (общий singleton для ВСЕХ
+    # стратегий) даже если явно передан синтаксически невалидный адрес —
+    # только предупреждает в лог. Проверяем явным override, не полагаясь
+    # на дефолты (которые теперь корректны).
+    import logging
+    with caplog.at_level(logging.WARNING, logger="wakefinder.config"):
+        s = _settings(aave_price_oracle_address="0x54586bE62E3c3580375aE3723C145253060Ca0C")  # 39 hex — обрезанный
+    assert s.aave_price_oracle_address  # сконструировалось, не упало
     assert "aave_price_oracle_address" in caplog.text
 
 

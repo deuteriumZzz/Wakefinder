@@ -2,12 +2,13 @@
 IUniswapV3Pool/SwapRouter02) — только функции, реально используемые
 chains/eth/jit_liquidity.py и v3_swap_watcher.py, не полный интерфейс.
 
-ЧЕСТНО: адреса контрактов (config.py) и сигнатуры функций — из
-документированного, стабильного публичного интерфейса Uniswap V3
-(github.com/Uniswap/v3-periphery, github.com/Uniswap/v3-core) — актуальность
-конкретных АДРЕСОВ для mainnet НЕ проверена вживую в этой песочнице (нет
-сетевого доступа), та же оговорка, что у Aave/CoW Protocol адресов в этом
-проекте. ПРОВЕРЬТЕ САМИ перед использованием.
+Сигнатуры функций — из документированного, стабильного публичного
+интерфейса Uniswap V3 (github.com/Uniswap/v3-periphery, github.com/Uniswap/v3-core).
+Адреса контрактов (config.py: jit_npm_address/jit_swap_router_address)
+ПРОВЕРЕНЫ ВЖИВУЮ 2026-08-18 через реальный eth_call на mainnet — оба
+дефолта вызвали .factory() и вернули ОДИН И ТОТ ЖЕ реальный адрес фабрики
+Uniswap V3 (0x1F98431c8aD98523631AE4a59f267346ea31F984), взаимно
+подтверждая друг друга. Если меняете дефолты — сверяйте самостоятельно.
 
 Минт/decrease/collect идут через NonfungiblePositionManager (периферийный
 контракт САМОГО Uniswap), а не прямым вызовом IUniswapV3Pool.mint() — прямой
