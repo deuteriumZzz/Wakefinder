@@ -1,16 +1,18 @@
 # Профиль: ликвидации на Aave V3 — четвёртая стратегия, отдельная от
 # арбитража/копитрейдинга/снайпинга. См. docstring chains/eth/liquidate.py.
 #
-# РЕАКТИВНАЯ discovery: конкурирует за уже найденные другими ликвидаторами
-# позиции (их pending liquidationCall в публичном мемпуле), не сканирует
-# рынок самостоятельно — см. docstring chains/eth/liquidation_watcher.py.
+# РЕАКТИВНАЯ discovery всегда включена: конкурирует за уже найденные
+# другими ликвидаторами позиции (их pending liquidationCall в публичном
+# мемпуле) — см. docstring chains/eth/liquidation_watcher.py. Опционально
+# ДОПОЛНЯЕТСЯ активным сканированием (см. liquidation_scan_enabled ниже и
+# docstring chains/eth/liquidation_scanner.py) — оба слоя работают вместе.
 #
 # КАПИТАЛ КОШЕЛЬКА, НЕ FLASH LOAN — держите на кошельке debt-активы из
 # LIQUIDATION_DEBT_ASSETS (задаётся через .env, не здесь — это адреса
 # ТОКЕНОВ, не risk-параметр), которыми готовы погашать чужой долг. Пусто =
 # стратегия неактивна.
 #
-# Требует ОТДЕЛЬНОГО процесса/кошелька от других 3 стратегий при общем
+# Требует ОТДЕЛЬНОГО процесса/кошелька от других 4 стратегий при общем
 # ETH_PRIVATE_KEY — иначе конфликт nonce.
 #
 # Запуск: python -m wakefinder.cli run configs/eth-liquidate.toml
@@ -22,3 +24,11 @@ strategy = "liquidate"
 liquidation_min_profit_usd = 5.0    # минимальный чистый профит (после оценки газа), чтобы участвовать в гонке
 liquidation_gas_limit = 400000      # оценка газа liquidationCall — используется и в профит-расчёте, и как gas-лимит транзакции
 max_drawdown_eth = 0.3
+
+# Активное сканирование — выключено по умолчанию (см. .env.example про
+# LIQUIDATION_SCAN_ENABLED/LIQUIDATION_COLLATERAL_ASSETS, это адреса
+# токенов через .env, не risk-параметры). Раскомментируйте, чтобы включить
+# именно для этого профиля:
+# liquidation_scan_enabled = true
+# liquidation_scan_interval_seconds = 300
+# liquidation_scan_lookback_blocks = 50000

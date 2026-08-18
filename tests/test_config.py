@@ -37,6 +37,19 @@ def test_unknown_router_is_rejected():
         _settings(eth_router_address="0x0000000000000000000000000000000000000000")
 
 
+def test_malformed_aave_address_warns_but_does_not_raise(caplog):
+    # aave_pool_data_provider_address/aave_price_oracle_address по умолчанию —
+    # 39 hex-символов вместо 40 (найдено при расширении охвата ликвидаций,
+    # см. docstring _warn_malformed_aave_addresses в config.py). НЕ должно
+    # ронять Settings() — это общий singleton для ВСЕХ стратегий.
+    import logging
+    with caplog.at_level(logging.WARNING, logger="wakefinder.config"):
+        s = _settings()
+    assert s.aave_pool_data_provider_address  # сконструировалось, не упало
+    assert "aave_pool_data_provider_address" in caplog.text
+    assert "aave_price_oracle_address" in caplog.text
+
+
 def test_both_plain_and_file_key_rejected(tmp_path):
     path = str(tmp_path / "eth.enc")
     encrypt_to_file(KEY_A, "pw", path)

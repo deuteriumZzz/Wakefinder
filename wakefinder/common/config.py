@@ -4,6 +4,7 @@ import stat
 from functools import lru_cache
 
 from eth_account import Account
+from eth_utils import is_address
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -319,11 +320,13 @@ class Settings(BaseSettings):
     copytrade_sizing_min_multiplier: float = Field(default=0.25, gt=0)
     copytrade_sizing_max_multiplier: float = Field(default=1.5, gt=0)
 
-    # Ликвидации на Aave V3 (chains/eth/liquidate.py) — четвёртая стратегия,
-    # РЕАКТИВНАЯ (конкурирует за чужие уже найденные pending liquidationCall,
-    # не ищет недообеспеченные позиции самостоятельно, см. docstring
-    # liquidation_watcher.py). Использует КАПИТАЛ КОШЕЛЬКА (не flash loan) —
-    # нужно заранее держать и одобрить (approve) debt-активы, которыми готовы
+    # Ликвидации на Aave V3 (chains/eth/liquidate.py) — четвёртая стратегия.
+    # По умолчанию РЕАКТИВНАЯ (конкурирует за чужие уже найденные pending
+    # liquidationCall, см. docstring liquidation_watcher.py); опционально
+    # ДОПОЛНЯЕТСЯ активным сканированием (liquidation_scan_enabled, см.
+    # liquidation_scanner.py) — оба слоя работают ОДНОВРЕМЕННО, не
+    # взаимоисключающе. Использует КАПИТАЛ КОШЕЛЬКА (не flash loan) — нужно
+    # заранее держать и одобрить (approve) debt-активы, которыми готовы
     # погашать чужой долг, см. README "Ликвидации на Aave V3".
     aave_pool_address: str = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
     aave_pool_data_provider_address: str = "0x7B4EB56E7CD4b454BA8ff71E4518426369a138a"
@@ -335,6 +338,14 @@ class Settings(BaseSettings):
     liquidation_debt_assets: str = ""
     liquidation_min_profit_usd: float = Field(default=5.0, gt=0)
     liquidation_gas_limit: int = Field(default=400_000, ge=1)
+    # Активное сканирование (см. chains/eth/liquidation_scanner.py) — опт-ин,
+    # по умолчанию выключено (старое чисто-реактивное поведение). Требует
+    # ТАКЖЕ liquidation_collateral_assets (без него getUserReserveData
+    # нечем перебирать на стороне обеспечения — см. docstring сканера).
+    liquidation_scan_enabled: bool = False
+    liquidation_collateral_assets: str = ""
+    liquidation_scan_interval_seconds: float = Field(default=300.0, gt=0)
+    liquidation_scan_lookback_blocks: int = Field(default=50_000, ge=0)  # ~неделя при 12с/блок — окно первого backfill по Borrow-событиям
 
     # Exit через CoW Protocol (common/cowswap.py) вместо прямого AMM-свопа
     # для стоп-лосс/trailing-stop выходов в copytrade.py/snipe.py — Tier D
@@ -389,6 +400,27 @@ class Settings(BaseSettings):
                 f"jit_npm_address {self.jit_npm_address} отсутствует в KNOWN_NPM_ADDRESSES — "
                 "добавьте его осознанно в wakefinder/common/config.py, если это намеренно"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _warn_malformed_aave_addresses(self) -> "Settings":
+        """НЕ raise (в отличие от allowlist-валидаторов выше) — это была бы
+        поломка Settings() для ВСЕХ стратегий (общий lru_cache-singleton, см.
+        cli.py), включая те, что вообще не используют Aave. Найдено при
+        расширении охвата ликвидаций 2026-08-18: aave_pool_data_provider_address/
+        aave_price_oracle_address по умолчанию — 39 hex-символов вместо 40
+        (синтаксически невалидный адрес, не вопрос верификации "правильный ли
+        контракт" — Web3.to_checksum_address() упадёт на этом ДО любого сетевого
+        вызова). ПРОВЕРЬТЕ И ИСПРАВЬТЕ перед использованием liquidate/jit —
+        см. https://github.com/bgd-labs/aave-address-book."""
+        for field_name in ("aave_pool_address", "aave_pool_data_provider_address", "aave_price_oracle_address"):
+            value = getattr(self, field_name)
+            if not is_address(value):
+                logger.warning(
+                    "%s=%r НЕ является синтаксически валидным Ethereum-адресом (проверьте длину/hex) — "
+                    "liquidate/jit упадут при первом обращении к этому контракту, см. docstring _warn_malformed_aave_addresses",
+                    field_name, value,
+                )
         return self
 
     @model_validator(mode="after")

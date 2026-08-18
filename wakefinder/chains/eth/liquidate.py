@@ -1,9 +1,19 @@
 """Ликвидации недообеспеченных позиций на Aave V3 — четвёртая стратегия,
 отдельная от арбитража/копитрейдинга/снайпинга. Атомарная, как арбитраж
-(нет держания направленного риска между входом и выходом), но РЕАКТИВНАЯ по
-discovery (см. docstring chains/eth/liquidation_watcher.py) — конкурирует за
-уже найденные другими ликвидаторами позиции (их pending liquidationCall в
-публичном мемпуле), а не сканирует рынок самостоятельно.
+(нет держания направленного риска между входом и выходом). Два ИСТОЧНИКА
+кандидатов, оба сливаются в одну очередь и обрабатываются ОДНОЙ и той же
+_handle_pending_liquidation():
+
+1. РЕАКТИВНЫЙ (всегда включён) — chains/eth/liquidation_watcher.py,
+   конкурирует за уже найденные другими ликвидаторами позиции (их pending
+   liquidationCall в публичном мемпуле).
+2. АКТИВНЫЙ (опционально, LIQUIDATION_SCAN_ENABLED) —
+   chains/eth/liquidation_scanner.py, сам ищет недообеспеченные позиции
+   через историю Borrow-событий + периодическую проверку healthFactor.
+
+Обработка кандидатов из очереди — ПОСЛЕДОВАТЕЛЬНАЯ (та же причина, что у
+многопуловой очереди в jit_liquidity.py: общий кошелёк/nonce, гонка иначе
+неизбежна между двумя источниками).
 
 КАПИТАЛ КОШЕЛЬКА, НЕ FLASH LOAN: Pool.liquidationCall() требует, чтобы
 вызывающий УЖЕ держал debtToCover нужного debt-актива на балансе (Aave
@@ -19,7 +29,7 @@ discovery (см. docstring chains/eth/liquidation_watcher.py) — конкури
 IPoolDataProvider.getReserveConfigurationData.liquidationBonus) — та же
 дисциплина, что у common/amm.py для арбитража, не приближение.
 
-Требует ОТДЕЛЬНОГО процесса/кошелька от остальных 3 стратегий при общем
+Требует ОТДЕЛЬНОГО процесса/кошелька от остальных 4 стратегий при общем
 ETH_PRIVATE_KEY (то же ограничение по nonce, что и везде в проекте).
 """
 
@@ -35,6 +45,7 @@ from web3 import AsyncWeb3, Web3, WebsocketProviderV2
 
 from wakefinder.chains.eth.aave_abi import AAVE_POOL_ABI, AAVE_POOL_DATA_PROVIDER_ABI, AAVE_PRICE_ORACLE_ABI
 from wakefinder.chains.eth.abi import ERC20_ABI
+from wakefinder.chains.eth.liquidation_scanner import discover_borrowers, scan_for_liquidatable
 from wakefinder.chains.eth.liquidation_watcher import LiquidationWatcher
 from wakefinder.chains.eth.sender import FlashbotsBundleSender
 from wakefinder.common import heartbeat, killswitch, pnl_ledger, trade_log, wallet_lock
@@ -168,6 +179,36 @@ async def _handle_pending_liquidation(
     return included
 
 
+async def _reactive_producer(watcher: LiquidationWatcher, queue: "asyncio.Queue[PendingLiquidation]") -> None:
+    async for pending in with_reconnect(watcher.watch):
+        await queue.put(pending)
+
+
+async def _scan_producer(
+    w3: AsyncWeb3, pool, data_provider, settings, debt_assets: set[str], collateral_assets: set[str],
+    queue: "asyncio.Queue[PendingLiquidation]",
+) -> None:
+    """Периодически: подтягивает новых заёмщиков (Borrow-события) + считает
+    healthFactor уже известных, найденные ликвидируемые позиции — в ту же
+    очередь, что и реактивный watcher. Ошибка одного цикла (RPC-сбой и т.п.)
+    не останавливает сканирование — логируется, следующий цикл как обычно."""
+    borrowers: set[str] = set()
+    last_scanned_block = max(0, await w3.eth.block_number - settings.liquidation_scan_lookback_blocks)
+    while True:
+        try:
+            current_block = await w3.eth.block_number
+            if current_block > last_scanned_block:
+                borrowers |= await discover_borrowers(w3, pool, last_scanned_block + 1, current_block)
+                last_scanned_block = current_block
+            for candidate in await scan_for_liquidatable(pool, data_provider, borrowers, debt_assets, collateral_assets):
+                await queue.put(candidate)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("сканирование ликвидаций не удалось (%s) — пробуем на следующем цикле", type(exc).__name__)
+        await asyncio.sleep(settings.liquidation_scan_interval_seconds)
+
+
 async def run() -> None:
     settings = get_settings()
     account = Account.from_key(settings.resolved_eth_private_key())
@@ -177,6 +218,9 @@ async def run() -> None:
     debt_assets = {a.strip().lower() for a in settings.liquidation_debt_assets.split(",") if a.strip()}
     if not debt_assets:
         logger.warning("LIQUIDATION_DEBT_ASSETS пуст — стратегия ничего не будет делать (не с чем конкурировать)")
+    collateral_assets = {a.strip().lower() for a in settings.liquidation_collateral_assets.split(",") if a.strip()}
+    if settings.liquidation_scan_enabled and not collateral_assets:
+        logger.warning("LIQUIDATION_SCAN_ENABLED включён, но LIQUIDATION_COLLATERAL_ASSETS пуст — сканер не найдёт ни одной позиции (нечем перебирать сторону обеспечения)")
 
     last_drawdown_check = 0.0
     consecutive_failures = 0
@@ -203,11 +247,16 @@ async def run() -> None:
             dry_run=settings.dry_run,
         )
 
+        queue: asyncio.Queue = asyncio.Queue()
+        producer_tasks = [asyncio.create_task(_reactive_producer(watcher, queue))]
+        if settings.liquidation_scan_enabled:
+            producer_tasks.append(asyncio.create_task(_scan_producer(w3, pool, data_provider, settings, debt_assets, collateral_assets, queue)))
+
         heartbeat_path = os.path.join(settings.heartbeat_dir, "eth_liquidate.heartbeat")
         heartbeat_task = asyncio.create_task(heartbeat.loop(heartbeat_path, settings.heartbeat_interval_seconds))
 
         try:
-            async for pending in with_reconnect(watcher.watch):
+            while True:
                 if killswitch.is_engaged(settings.kill_switch_file):
                     logger.warning("kill switch %s присутствует — останавливаемся", settings.kill_switch_file)
                     send_telegram_alert(settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id, "[wakefinder/eth liquidate] kill switch присутствует — бот остановлен")
@@ -226,6 +275,7 @@ async def run() -> None:
                         killswitch.engage(settings.kill_switch_file, "drawdown breach: eth liquidate")
                         return
 
+                pending = await queue.get()
                 included = await _handle_pending_liquidation(w3, account, chain_id, settings, sender, pool, oracle, data_provider, debt_assets, pending)
                 if included is None:
                     continue  # пропуск (не наш debt-актив/недостаточно профита/баланса) — не попытка, счётчик не трогаем
@@ -245,3 +295,5 @@ async def run() -> None:
                     return
         finally:
             heartbeat_task.cancel()
+            for task in producer_tasks:
+                task.cancel()
