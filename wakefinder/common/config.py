@@ -308,6 +308,15 @@ class Settings(BaseSettings):
     dashboard_username: str | None = None
     dashboard_password: SecretStr | None = None
 
+    # Портфельный вид (common/portfolio.py) — ОПЦИОНАЛЬНО перечисленные
+    # публичные адреса кошельков ДРУГИХ запущенных процессов/стратегий
+    # (сами приватные ключи не нужны — только read-only баланс через RPC).
+    # Формат: "label:chain:address" через запятую, напр.
+    # "eth_arb:eth:0x1111...,sol_snipe:solana:ABC...". Пусто по умолчанию —
+    # портфельный вид ограничивается PnL-агрегатом по pnl_ledger.jsonl
+    # (общий на все процессы), без капитала.
+    portfolio_wallets: str = ""
+
     # Поэтапный ввод капитала (см. common/canary.py) — по умолчанию выключен
     # (1.0 = сразу полный размер), включается явно в профиле для нового
     # watched_wallets-набора/пары, которым ещё не доверяете на полную.

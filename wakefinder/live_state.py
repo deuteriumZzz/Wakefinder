@@ -22,6 +22,7 @@ from wakefinder.chains.eth.abi import ROUTER_ABI
 from wakefinder.common import heartbeat, killswitch
 from wakefinder.common.metrics import compute_chain_metrics
 from wakefinder.common.pnl_ledger import read_closed_trades
+from wakefinder.common.portfolio import fetch_wallet_balances, parse_portfolio_wallets, portfolio_summary
 from wakefinder.common.price_feed import fetch_usd_prices
 from wakefinder.common.price_history import log_snapshot
 from wakefinder.common.strategy_stats import compute_strategy_stats
@@ -297,6 +298,13 @@ async def gather_state(settings) -> dict:
     state["pnl_history"] = pnl_history_view(settings.pnl_ledger_file, prices)
     state["strategy_stats"] = strategy_stats_view(settings.pnl_ledger_file)
     state["prices"] = prices
+
+    portfolio_wallets = parse_portfolio_wallets(settings.portfolio_wallets)
+    solana_url = settings.solana_rpc_http_url.get_secret_value() if settings.solana_rpc_http_url else None
+    wallet_balances = await fetch_wallet_balances(
+        portfolio_wallets, eth_rpc_http_url=settings.eth_rpc_http_url.get_secret_value(), solana_rpc_http_url=solana_url,
+    )
+    state["portfolio"] = portfolio_summary(settings.pnl_ledger_file, wallet_balances, prices)
     return state
 
 

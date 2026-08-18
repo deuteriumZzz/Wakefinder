@@ -241,6 +241,8 @@ _PAGE = """
   <div class="grid">
     <div class="card"><div class="label">ETH баланс</div><div class="value" id="eth-balance">…</div><div class="muted" id="eth-address"></div></div>
     <div class="card"><div class="label">SOL баланс</div><div class="value" id="sol-balance">…</div><div class="muted" id="sol-address"></div></div>
+    <div class="card"><div class="label">Портфель — капитал (USD)</div><div class="value" id="portfolio-capital">…</div><div class="muted" id="portfolio-capital-note"></div></div>
+    <div class="card"><div class="label">Портфель — реализованный PnL (USD)</div><div class="value" id="portfolio-pnl">…</div><div class="muted" id="portfolio-pnl-note"></div></div>
   </div>
 
   <h3 id="chart-title">График позиции — кликните по токену в любой таблице ниже</h3>
@@ -270,6 +272,20 @@ _PAGE = """
 
   <h3>Sharpe/Sortino + дрифт win-rate по стратегии</h3>
   <table id="strategy-stats-table"><thead><tr><th>Сеть</th><th>Стратегия</th><th>Сделок</th><th>Win rate</th><th>Win rate (недавние)</th><th>Дрифт</th><th>Sharpe</th><th>Sortino</th></tr></thead><tbody></tbody></table>
+
+  <h3>Портфель — реализованный PnL по стратегии (USD)</h3>
+  <p class="muted" style="max-width:70ch;">
+    Сумма по ВСЕЙ истории pnl_ledger.jsonl (общий файл на все процессы, если
+    не переопределён per-профиль) — не только за текущую сессию дашборда.
+  </p>
+  <table id="portfolio-pnl-table"><thead><tr><th>Сеть</th><th>Стратегия</th><th>Realized PnL</th><th>Realized PnL (USD)</th></tr></thead><tbody></tbody></table>
+
+  <h3>Портфель — кошельки других процессов (PORTFOLIO_WALLETS)</h3>
+  <p class="muted" style="max-width:70ch;">
+    Публичные адреса, перечисленные в PORTFOLIO_WALLETS — read-only баланс
+    через RPC, без приватных ключей. Пусто, если не сконфигурировано.
+  </p>
+  <table id="portfolio-wallets-table"><thead><tr><th>Метка</th><th>Сеть</th><th>Адрес</th><th>Баланс</th><th>Баланс (USD)</th></tr></thead><tbody></tbody></table>
 
   <h3>Живой конфиг (watched_wallets / allowlist / denylist / risk / пулы арбитража)</h3>
   <p class="muted" style="max-width:70ch;">
@@ -408,6 +424,41 @@ async function refresh() {
     <td>${(s.win_rate * 100).toFixed(0)}%</td><td>${(s.win_rate_recent * 100).toFixed(0)}%</td>
     <td>${driftCell(s.win_rate_drift)}</td><td>${ratio(s.sharpe)}</td><td>${ratio(s.sortino)}</td></tr>
   `).join("") : '<tr><td colspan="8" class="muted">нет закрытых сделок в pnl_ledger</td></tr>';
+
+  const portfolio = state.portfolio;
+  const capitalEl = document.getElementById("portfolio-capital");
+  const capitalNoteEl = document.getElementById("portfolio-capital-note");
+  if (portfolio.capital.complete) {
+    capitalEl.textContent = "$" + portfolio.capital.total_capital_usd.toFixed(2);
+    capitalNoteEl.textContent = portfolio.capital.wallets.length + " кошельков";
+  } else if (portfolio.capital.wallets.length) {
+    capitalEl.textContent = "$" + portfolio.capital.total_capital_usd.toFixed(2) + "*";
+    capitalNoteEl.textContent = "* неполно — часть балансов/цен не получена";
+  } else {
+    capitalEl.textContent = "—";
+    capitalNoteEl.textContent = "PORTFOLIO_WALLETS не задан";
+  }
+
+  const pnlEl = document.getElementById("portfolio-pnl");
+  const pnlNoteEl = document.getElementById("portfolio-pnl-note");
+  const pnlTotal = portfolio.pnl.total_realized_pnl_usd;
+  pnlEl.textContent = "$" + pnlTotal.toFixed(2) + (portfolio.pnl.complete ? "" : "*");
+  pnlEl.className = "value " + (pnlTotal >= 0 ? "ok" : "bad");
+  pnlNoteEl.textContent = portfolio.pnl.complete ? "все стратегии, вся история" : "* неполно — нет цены хотя бы для одной сети";
+
+  const ppBody = document.querySelector("#portfolio-pnl-table tbody");
+  ppBody.innerHTML = portfolio.pnl.breakdown.length ? portfolio.pnl.breakdown.map(b => `
+    <tr><td>${esc(b.chain)}</td><td>${esc(b.strategy)}</td>
+    <td class="${b.realized_pnl >= 0 ? 'ok' : 'bad'}">${num(b.realized_pnl)}</td>
+    <td>${b.realized_pnl_usd !== null ? "$" + b.realized_pnl_usd.toFixed(2) : '<span class="muted">—</span>'}</td></tr>
+  `).join("") : '<tr><td colspan="4" class="muted">нет закрытых сделок в pnl_ledger</td></tr>';
+
+  const pwBody = document.querySelector("#portfolio-wallets-table tbody");
+  pwBody.innerHTML = portfolio.capital.wallets.length ? portfolio.capital.wallets.map(w => `
+    <tr><td>${esc(w.label)}</td><td>${esc(w.chain)}</td><td>${short(w.address)}</td>
+    <td>${w.balance !== null ? num(w.balance) : '<span class="muted">RPC недоступен</span>'}</td>
+    <td>${w.balance !== null && state.prices[w.chain === "eth" ? "eth" : "sol"] ? "$" + (w.balance * state.prices[w.chain === "eth" ? "eth" : "sol"]).toFixed(2) : '<span class="muted">—</span>'}</td></tr>
+  `).join("") : '<tr><td colspan="5" class="muted">PORTFOLIO_WALLETS не задан</td></tr>';
 }
 
 async function loadConfig() {

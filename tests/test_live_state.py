@@ -129,6 +129,7 @@ class _FakeSettings:
         self.eth_router_address = "0xROUTER"
         self.eth_weth_address = "0xWETH"
         self.solana_rpc_http_url = None  # ветка Solana пропускается целиком (short-circuit на and)
+        self.portfolio_wallets = ""  # пусто -> fetch_wallet_balances не делает сетевых вызовов, см. test_portfolio.py
 
     def resolved_eth_private_key(self):
         return "0x7413d6e6fe53a10645335f03b3fae74eaff8a21e65a0e7cbedcd53e8c1951004"
