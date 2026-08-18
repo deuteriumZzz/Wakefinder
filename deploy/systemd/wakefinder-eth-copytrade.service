@@ -7,9 +7,10 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/wakefinder
 EnvironmentFile=/opt/wakefinder/.env
-# как и в wakefinder-eth-arb.service — замените ExecStart на свою обёртку с
-# реальным watched_wallets/token_allowlist, если не используете голый модуль.
-ExecStart=/opt/wakefinder/.venv/bin/python -m wakefinder.chains.eth.copytrade
+# configs/eth-copytrade-conservative.toml — пример профиля, отредактируйте
+# watched_wallets/token_allowlist. Альтернатива: eth-copytrade-fast-memecoin.toml
+# (быстрее, ниже consensus — см. README).
+ExecStart=/opt/wakefinder/.venv/bin/wakefinder run configs/eth-copytrade-conservative.toml
 Restart=always
 RestartSec=5
 User=wakefinder

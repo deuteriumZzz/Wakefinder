@@ -1,0 +1,19 @@
+[Unit]
+Description=Wakefinder — ETH снайпинг новых пулов
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wakefinder
+EnvironmentFile=/opt/wakefinder/.env
+# configs/eth-snipe.toml — публичный мемпул. Альтернатива:
+# eth-snipe-backrun.toml (идёт Flashbots-бандлом, см. README про
+# SNIPE_BACKRUN_MODE и компромисс скорость-против-sandwich).
+ExecStart=/opt/wakefinder/.venv/bin/wakefinder run configs/eth-snipe.toml
+Restart=always
+RestartSec=5
+User=wakefinder
+
+[Install]
+WantedBy=multi-user.target

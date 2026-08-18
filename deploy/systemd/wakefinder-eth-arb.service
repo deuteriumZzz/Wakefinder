@@ -7,11 +7,9 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/wakefinder
 EnvironmentFile=/opt/wakefinder/.env
-# python -m wakefinder.chains.eth.main запускает run() с пустыми
-# pool_registry/reference_pools (см. wakefinder/chains/eth/main.py) — это
-# заглушка для smoke-теста, не рабочая конфигурация. Замените ExecStart на
-# свой скрипт-обёртку, который вызывает run(...) с реальными пулами/watchlist.
-ExecStart=/opt/wakefinder/.venv/bin/python -m wakefinder.chains.eth.main
+# configs/eth-arb.toml — пример профиля, отредактируйте под свои
+# pools/reference_pools перед боевым запуском (см. README "Конфиг-профили").
+ExecStart=/opt/wakefinder/.venv/bin/wakefinder run configs/eth-arb.toml
 Restart=always
 RestartSec=5
 User=wakefinder

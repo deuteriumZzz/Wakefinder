@@ -4,12 +4,22 @@
 через Flashbots/Jito) на Ethereum и Solana. Независим от BitbotBY — этот проект
 on-chain, BitbotBY — CEX/ccxt.
 
-Две независимые стратегии на каждой из двух сетей — 4 отдельных процесса:
+5 стратегий, каждая — отдельный процесс/кошелёк (снайпинг на обеих сетях,
+ликвидации и JIT-ликвидность только на ETH):
 
 | | Ethereum | Solana |
 |---|---|---|
 | **Арбитраж** | `wakefinder/chains/eth/main.py` | `wakefinder/chains/solana/main.py` |
 | **Копитрейдинг** | `wakefinder/chains/eth/copytrade.py` | `wakefinder/chains/solana/copytrade.py` |
+| **Снайпинг новых пулов** | `wakefinder/chains/eth/snipe.py` | `wakefinder/chains/solana/snipe.py` |
+| **Ликвидации (Aave V3)** | `wakefinder/chains/eth/liquidate.py` | — |
+| **JIT-ликвидность (Uniswap V3)** | `wakefinder/chains/eth/jit_liquidity.py` | — |
+
+Переключение между стратегиями — не тумблер в одном работающем процессе, а
+выбор `strategy` в TOML-профиле (`wakefinder run configs/<profile>.toml`,
+см. "Конфиг-профили и CLI" ниже) — каждый профиль запускает свой отдельный
+процесс, можно держать несколько стратегий запущенными параллельно (на
+разных кошельках).
 
 Что делать при срабатывании kill switch/drawdown/других защит — см. [RUNBOOK.md](RUNBOOK.md).
 
@@ -41,7 +51,7 @@ on-chain, BitbotBY — CEX/ccxt.
                   └──────────────────────────────────────┘
 ```
 
-Каждый из 4 процессов — независимый watcher→simulator→sender конвейер
+Каждый процесс (независимо от стратегии) — независимый watcher→simulator→sender конвейер
 (`common/interfaces.py`: `MempoolWatcher`/`Simulator`/`BundleSender`, не
 привязаны к конкретной сети). Общая инфраструктура (риск-контроль,
 логирование, алерты) шарится через `common/`, но **у каждого процесса
@@ -191,7 +201,7 @@ TOML-фрагмент для `watched_wallets` — copy-paste в профиль,
 ### Выборочное выключение: несколько профилей одновременно
 
 Общий kill switch (см. "Портфельный риск-контроль") останавливает СРАЗУ все
-4 процесса — это осознанно для аварийной ситуации, но неудобно, если нужно
+процессы Wakefinder (любая стратегия, любая сеть) — это осознанно для аварийной ситуации, но неудобно, если нужно
 выключить только сегодняшнюю стратегию, оставив остальные работать. Профиль
 может задать свой независимый kill switch:
 
@@ -235,9 +245,9 @@ python -m wakefinder.common.killswitch stop --path ~/.wakefinder_kill_eth_fast_m
 - [ ] `copytrade_max_total_exposure_pct` выставлен с учётом того, что позиции в мемкоинах могут обнулиться (rug pull) — стоп-лосс не защищает от полной потери ликвидности пула.
 - [ ] Арбитраж-профиль на мемкоины НЕ настраивается — у свежего токена обычно нет второго ликвидного пула на другом DEX, а без него арбитража по конструкции нет.
 
-## Портфельный риск-контроль (все 4 процесса: ETH/Solana × арбитраж/копитрейдинг)
+## Портфельный риск-контроль (все процессы, все 5 стратегий, обе сети)
 
-- **Единый kill switch** (`wakefinder/common/killswitch.py`) — все 4 процесса
+- **Единый kill switch** (`wakefinder/common/killswitch.py`) — все процессы
   проверяют ОДИН файл (по умолчанию абсолютный путь в домашней директории,
   не зависит от рабочей директории процесса). Управление:
   ```bash
@@ -335,17 +345,18 @@ python -m wakefinder.common.killswitch stop --path ~/.wakefinder_kill_eth_fast_m
   python -m wakefinder.common.heartbeat eth_arb.heartbeat 90
   ```
 - **Process supervision** (`deploy/systemd/*.service`) — шаблоны systemd-юнитов
-  с `Restart=always` на все 4 процесса. Намеренно не реализовано на Python —
-  супервизия процесса это работа ОС/init-системы, а не самого бота; см.
-  комментарии внутри юнитов про замену `ExecStart` на `wakefinder run <профиль>`
-  (голый `python -m wakefinder.chains.*` запускается с пустыми
-  `pool_registry`/`watched_wallets` — это smoke-test заглушка).
+  с `Restart=always` на все 8 процессов (5 стратегий, ETH+Solana где применимо).
+  Намеренно не реализовано на Python —
+  супервизия процесса это работа ОС/init-системы, а не самого бота. Каждый
+  юнит уже вызывает `wakefinder run configs/<профиль>.toml` — отредактируйте
+  сам TOML-профиль (пулы/watched_wallets/риск) под боевые значения, не
+  `ExecStart`.
 
 ## CI и контейнеризация (Tier 3)
 
 - **CI** (`.github/workflows/ci.yml`) — на каждый push/PR прогоняет весь
   pytest-suite и `py_compile` по всему пакету.
-- **Docker** (`Dockerfile`) — один образ на все 4 процесса, конкретный
+- **Docker** (`Dockerfile`) — один образ на все процессы/стратегии, конкретный
   модуль выбирается командой при `docker run` (см. комментарий в файле).
 - Инцидент-runbook — [RUNBOOK.md](RUNBOOK.md).
 
@@ -438,7 +449,7 @@ vault-аккаунта, который транзакция уже подтве�
   модуля) — пассфраза всё равно должна быть в окружении живого процесса.
 - Стратегия по умолчанию — backrun/арбитраж, не sandwich (sandwich напрямую
   вредит отслеживаемому трейдеру — это осознанный опт-ин, не поведение по умолчанию).
-- **Kill switch**: единый на все 4 процесса, см. раздел "Портфельный риск-контроль" выше — `python -m wakefinder.common.killswitch stop|resume|status`.
+- **Kill switch**: единый на все процессы/стратегии, см. раздел "Портфельный риск-контроль" выше — `python -m wakefinder.common.killswitch stop|resume|status`.
 - **Все секреты — `SecretStr`**: RPC URL, приватные ключи, пассфраза keystore,
   Telegram-токен — pydantic скрывает значение в `repr()`/`str()`, чтобы
   необработанный traceback/лог не слил его в открытом виде. Регрессия

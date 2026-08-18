@@ -11,8 +11,8 @@
 1. `python -m wakefinder.common.killswitch status` — когда и почему включился
    (причина пишется в файл при auto-engage: `drawdown breach: ...` /
    `consecutive failures: ...`).
-2. Не снимайте kill switch не разобравшись — он затрагивает ВСЕ 4 процесса
-   сразу (единый файл).
+2. Не снимайте kill switch не разобравшись — он затрагивает ВСЕ процессы
+   Wakefinder сразу, любая стратегия/сеть (единый файл).
 3. Разобрались → `python -m wakefinder.common.killswitch resume`, затем
    перезапустите нужные процессы (systemd: `systemctl restart wakefinder-*`).
 

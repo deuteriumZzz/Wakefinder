@@ -1,0 +1,21 @@
+[Unit]
+Description=Wakefinder — ETH JIT-ликвидность (Uniswap V3)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wakefinder
+EnvironmentFile=/opt/wakefinder/.env
+# configs/eth-jit.toml — ОДИН сконфигурированный пул (JIT_POOL_ADDRESS и
+# т.д. через .env, см. README "JIT-ликвидность на Uniswap V3"). Требует
+# предварительно профинансированный кошелёк под JIT_CAPITAL0_WEI/
+# JIT_CAPITAL1_WEI, отдельный от остальных стратегий при общем
+# ETH_PRIVATE_KEY.
+ExecStart=/opt/wakefinder/.venv/bin/wakefinder run configs/eth-jit.toml
+Restart=always
+RestartSec=5
+User=wakefinder
+
+[Install]
+WantedBy=multi-user.target
