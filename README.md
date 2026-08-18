@@ -22,6 +22,8 @@ on-chain, BitbotBY — CEX/ccxt.
 разных кошельках).
 
 Что делать при срабатывании kill switch/drawdown/других защит — см. [RUNBOOK.md](RUNBOOK.md).
+Пошаговый путь от установки до реальных денег (что вписывать, DRY_RUN,
+форк-тест, пилот) — см. [GOING_LIVE.md](GOING_LIVE.md).
 
 ## Архитектура
 
