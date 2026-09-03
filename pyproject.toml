@@ -34,7 +34,14 @@ include = ["wakefinder*"]
 # anchorpy (транзитивная зависимость jupiter_python_sdk/solana) регистрирует
 # свой pytest-плагин, который тянет pytest-asyncio/pytest-xprocess — нам они
 # не нужны, просто отключаем автозагрузку плагина.
-addopts = "-p no:pytest_anchorpy"
+#
+# web3 таким же образом регистрирует свой pytest-плагин (pytest_ethereum),
+# который на импорте тянет eth_typing.ContractName — тип, убранный в новых
+# версиях eth-typing (web3>=6.15 сверху её не пинует, так что свежий
+# pip install может поставить несовместимую пару и collection падает ещё до
+# запуска наших тестов). Плагин не нужен — pytest-ethereum фикстурами мы не
+# пользуемся, — поэтому отключаем автозагрузку так же, как pytest_anchorpy.
+addopts = "-p no:pytest_anchorpy -p no:pytest_ethereum"
 
 [tool.ruff]
 # 230 — под уже существующий стиль (длинные описательные комментарии на
