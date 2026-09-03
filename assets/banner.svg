@@ -1,0 +1,86 @@
+<svg width="1280" height="280" viewBox="0 0 1280 280" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0e1a"/>
+      <stop offset="55%" stop-color="#0d1326"/>
+      <stop offset="100%" stop-color="#131a33"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7dd3fc"/>
+      <stop offset="50%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#f472b6"/>
+    </linearGradient>
+    <linearGradient id="eth" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#8fa3ff"/>
+      <stop offset="100%" stop-color="#5468e0"/>
+    </linearGradient>
+    <linearGradient id="sol" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9945FF"/>
+      <stop offset="100%" stop-color="#14F195"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="280" fill="url(#bg)"/>
+  <rect width="1280" height="280" fill="url(#grid)"/>
+  <circle cx="1060" cy="70" r="260" fill="url(#glow)"/>
+  <circle cx="180" cy="230" r="220" fill="url(#glow)"/>
+
+  <!-- mempool / node graph motif -->
+  <g stroke="#5b6790" stroke-width="1.2" stroke-opacity="0.55" fill="none">
+    <path d="M840 60 L930 95 L1005 55 L1090 100 L1170 65"/>
+    <path d="M930 95 L905 165 L1005 55"/>
+    <path d="M1005 55 L1060 150 L1090 100"/>
+    <path d="M905 165 L1000 195 L1060 150"/>
+    <path d="M1060 150 L1150 175 L1170 65"/>
+  </g>
+  <g fill="#93c5fd">
+    <circle cx="840" cy="60" r="3.5"/>
+    <circle cx="930" cy="95" r="3.5"/>
+    <circle cx="1005" cy="55" r="4.5"/>
+    <circle cx="1090" cy="100" r="3.5"/>
+    <circle cx="1170" cy="65" r="3.5"/>
+    <circle cx="905" cy="165" r="3.5"/>
+    <circle cx="1060" cy="150" r="5" fill="#f472b6"/>
+    <circle cx="1000" cy="195" r="3.5"/>
+    <circle cx="1150" cy="175" r="3.5"/>
+  </g>
+
+  <!-- ETH glyph -->
+  <g transform="translate(845,175)">
+    <polygon points="16,0 32,26 16,36 0,26" fill="url(#eth)" fill-opacity="0.9"/>
+    <polygon points="16,0 32,26 16,18" fill="#ffffff" fill-opacity="0.15"/>
+    <polygon points="0,32 16,42 32,32 16,58" fill="url(#eth)" fill-opacity="0.55"/>
+  </g>
+  <!-- SOL glyph -->
+  <g transform="translate(910,182)" fill="url(#sol)">
+    <rect x="0" y="0" width="34" height="6" rx="3"/>
+    <rect x="6" y="14" width="34" height="6" rx="3"/>
+    <rect x="0" y="28" width="34" height="6" rx="3"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="70" y="145" font-family="'JetBrains Mono','SF Mono',Consolas,monospace" font-size="72" font-weight="700" fill="url(#title)">WAKEFINDER</text>
+  <text x="72" y="180" font-family="'SF Mono',Consolas,monospace" font-size="20" fill="#9aa4c7" letter-spacing="1.5">MEV SEARCHER BOT · ETHEREUM + SOLANA</text>
+
+  <g font-family="'SF Mono',Consolas,monospace" font-size="14" fill="#7d88ad">
+    <text x="72" y="215">арбитраж</text>
+    <text x="180" y="215">·</text>
+    <text x="196" y="215">копитрейдинг</text>
+    <text x="333" y="215">·</text>
+    <text x="349" y="215">снайпинг</text>
+    <text x="443" y="215">·</text>
+    <text x="459" y="215">ликвидации Aave</text>
+    <text x="627" y="215">·</text>
+    <text x="643" y="215">JIT-ликвидность</text>
+  </g>
+
+  <rect x="70" y="238" width="1140" height="1" fill="#ffffff" fill-opacity="0.08"/>
+  <text x="70" y="264" font-family="'SF Mono',Consolas,monospace" font-size="13" fill="#5b6790">mempool watcher → simulator → Flashbots / Jito bundle sender</text>
+</svg>
