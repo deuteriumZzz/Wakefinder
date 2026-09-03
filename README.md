@@ -3,6 +3,11 @@
 </p>
 
 <p align="center">
+  <a href="README.md"><strong>Русский</strong></a> ·
+  <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/deuteriumZzz/Wakefinder/actions/workflows/ci.yml"><img src="https://github.com/deuteriumZzz/Wakefinder/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/chains-Ethereum%20%7C%20Solana-6b5ce7" alt="Chains">
